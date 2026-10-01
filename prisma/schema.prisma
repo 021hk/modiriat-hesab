@@ -1,0 +1,93 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+// دسته‌بندی هزینه/درآمد
+model Category {
+  id           String        @id @default(cuid())
+  name         String
+  type         String        @default("expense") // expense | income
+  color        String        @default("#10b981")
+  icon         String        @default("Tag")
+  createdAt    DateTime      @default(now())
+  updatedAt    DateTime      @updatedAt
+  transactions Transaction[]
+}
+
+// حساب بانکی
+model BankAccount {
+  id            String        @id @default(cuid())
+  name          String // نام نمایشی مثل "ملت - جاری"
+  bankName      String // نام بانک
+  accountNumber String?
+  cardNumber    String?
+  iban          String?
+  initialBalance Float       @default(0) // موجودی اولیه
+  color         String       @default("#8b5cf6")
+  isArchived    Boolean      @default(false)
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+  transactions  Transaction[]
+}
+
+// تراکنش مالی
+model Transaction {
+  id            String       @id @default(cuid())
+  type          String // income | expense
+  amount        Float
+  purpose       String? // بابت چه چیزی بود (فلان عدد برداشت شد بابت فلان)
+  categoryId    String?
+  category      Category?    @relation(fields: [categoryId], references: [id], onDelete: SetNull)
+  bankAccountId String?
+  bankAccount   BankAccount? @relation(fields: [bankAccountId], references: [id], onDelete: SetNull)
+  date          DateTime     @default(now())
+  source        String       @default("manual") // manual | sms
+  rawSms        String? // متن خام پیامک در صورت ورود از پیامک
+  createdAt     DateTime     @default(now())
+  updatedAt     DateTime     @updatedAt
+}
+
+// بدهکاران و طلبکاران
+model Debt {
+  id          String       @id @default(cuid())
+  name        String // نام شخص
+  type        String // debtor: به من بدهکار است | creditor: من بدهکار او هستم
+  amount      Float // مبلغ کل
+  paidAmount  Float        @default(0) // مبلغ تسویه‌شده
+  phone       String?
+  description String?
+  dueDate     DateTime?
+  isSettled   Boolean      @default(false)
+  attachments Attachment[]
+  createdAt   DateTime     @default(now())
+  updatedAt   DateTime     @updatedAt
+}
+
+// عکس رسید و پیوست‌های بدهی
+model Attachment {
+  id        String   @id @default(cuid())
+  debtId    String
+  debt      Debt     @relation(fields: [debtId], references: [id], onDelete: Cascade)
+  fileName  String
+  mimeType  String
+  data      String // base64
+  createdAt DateTime @default(now())
+}
+
+// لاگ پیامک‌های بانکی
+model SmsLog {
+  id            String   @id @default(cuid())
+  rawText       String
+  sender        String?
+  bankName      String?
+  parsedType    String? // income | expense | unknown
+  parsedAmount  Float?
+  status        String   @default("pending") // pending | imported | ignored
+  transactionId String?
+  createdAt     DateTime @default(now())
+}
