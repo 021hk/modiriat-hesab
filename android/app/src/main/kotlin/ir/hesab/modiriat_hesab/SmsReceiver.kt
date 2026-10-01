@@ -34,7 +34,7 @@ class SmsReceiver : BroadcastReceiver() {
             if (ch != null) {
                 ch.invokeMethod("onSms", map, object : MethodChannel.Result {
                     override fun success(p0: Any?) {}
-                    override fun error(p0: String?, p1: String?, p2: Any?) {}
+                    override fun error(p0: String, p1: String?, p2: Any?) {}
                     override fun notImplemented() {}
                 })
             } else {
