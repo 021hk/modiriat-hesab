@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { Capacitor } from "@capacitor/core";
 
 export function SwRegister() {
   useEffect(() => {
@@ -12,14 +13,17 @@ export function SwRegister() {
       // ignore
     }
 
-    // پاک‌سازی کش‌های قدیمی سرویس‌ورکر (نسخه‌های قبل از v3)
+    // در APK اندروید همه دارایی‌ها داخل خود برنامه است — سرویس‌ورکر لازم نیست
+    if (Capacitor.isNativePlatform()) return;
+
+    // پاک‌سازی کش‌های قدیمی سرویس‌ورکر (هر چیزی جز نسخه فعلی)
     if ("caches" in window) {
       caches
         .keys()
         .then((keys) =>
           Promise.all(
             keys
-              .filter((k) => !k.startsWith("hesab-yar-v3"))
+              .filter((k) => !k.startsWith("hesab-yar-v4"))
               .map((k) => caches.delete(k))
           )
         )

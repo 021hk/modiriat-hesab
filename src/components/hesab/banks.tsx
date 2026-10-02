@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -30,6 +30,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { Switch } from "@/components/ui/switch";
 import {
   Plus,
   MoreVertical,
@@ -43,9 +44,23 @@ import {
   CheckCheck,
   XCircle,
   Sparkles,
+  BellRing,
+  ShieldCheck,
+  ShieldAlert,
+  RefreshCw,
 } from "lucide-react";
 import { api, type BankAccount, type SmsLog, type Transaction } from "@/lib/client-api";
 import { formatMoney, parseMoneyInput, formatMoneyPlain } from "@/lib/format";
+import {
+  HesabSms,
+  isNativeAndroid,
+  getSmsPermission,
+  requestSmsPermission,
+  type SmsPermState,
+} from "@/lib/native-sms";
+import { syncBankSms, getLastSmsSync } from "@/lib/sms-sync";
+import { getMeta, setMeta } from "@/lib/local-db";
+import type { PluginListenerHandle } from "@capacitor/core";
 
 const BANKS = [
   "ملت", "صادرات", "ملی", "تجارت", "پارسیان", "پاسارگاد", "سامان", "کشاورزی",
@@ -184,6 +199,191 @@ function AccountDialog({
   );
 }
 
+const toFa = (n: number) => {
+  try {
+    return n.toLocaleString("fa-IR");
+  } catch {
+    return String(n);
+  }
+};
+
+// ─── خواندن خودکار پیامک‌های بانکی (فقط اندروید) ───
+function SmsAutoSync() {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [mounted, setMounted] = useState(false);
+  const [perm, setPerm] = useState<SmsPermState | null>(null);
+  const [syncing, setSyncing] = useState(false);
+  const [lastSync, setLastSync] = useState(0);
+  const [autoImport, setAutoImport] = useState(true);
+  const [convertRial, setConvertRial] = useState(true);
+
+  const syncingRef = useRef(false);
+  const optsRef = useRef({ autoImport: true, convertRial: true });
+  useEffect(() => {
+    optsRef.current = { autoImport, convertRial };
+  }, [autoImport, convertRial]);
+
+  const runSync = useCallback(
+    async (silent: boolean) => {
+      if (syncingRef.current) return;
+      syncingRef.current = true;
+      setSyncing(true);
+      try {
+        const res = await syncBankSms({ ...optsRef.current });
+        setLastSync(await getLastSmsSync());
+        qc.invalidateQueries({ queryKey: ["sms-logs"] });
+        qc.invalidateQueries({ queryKey: ["transactions"] });
+        qc.invalidateQueries({ queryKey: ["stats"] });
+        if (res.ok) {
+          const parts: string[] = [];
+          if (res.imported > 0) parts.push(`${toFa(res.imported)} تراکنش خودکار ثبت شد`);
+          if (res.queued > 0) parts.push(`${toFa(res.queued)} پیامک در صف بررسی است`);
+          const desc = parts.length > 0 ? parts.join(" — ") : "پیامک بانکی جدیدی نبود";
+          if (!silent || res.imported > 0 || res.queued > 0) {
+            toast({ title: "پیامک‌ها بررسی شد", description: desc });
+          }
+        } else if (!silent && res.reason === "permission") {
+          toast({ title: "دسترسی پیامک داده نشده است", variant: "destructive" });
+        } else if (!silent && res.reason === "error") {
+          toast({ title: "خطا در خواندن پیامک‌ها", variant: "destructive" });
+        }
+      } catch {
+        if (!silent) toast({ title: "خطا در همگام‌سازی", variant: "destructive" });
+      } finally {
+        syncingRef.current = false;
+        setSyncing(false);
+      }
+    },
+    [qc, toast]
+  );
+
+  // بارگذاری اولیه + sync خودکار در باز شدن تب
+  useEffect(() => {
+    if (!isNativeAndroid()) return;
+    setMounted(true);
+    void (async () => {
+      const [p, ls, ai, cr] = await Promise.all([
+        getSmsPermission(),
+        getLastSmsSync(),
+        getMeta<boolean>("smsAutoImport"),
+        getMeta<boolean>("smsConvertRial"),
+      ]);
+      setPerm(p);
+      setLastSync(ls || 0);
+      if (ai === false) setAutoImport(false);
+      if (cr === false) setConvertRial(false);
+      if (p === "granted") void runSync(true);
+    })();
+  }, [runSync]);
+
+  // گوش دادن به پیامک زنده (وقتی برنامه باز است)
+  useEffect(() => {
+    if (!isNativeAndroid()) return;
+    let handle: PluginListenerHandle | null = null;
+    let timer: ReturnType<typeof setTimeout> | null = null;
+    HesabSms.addListener("smsReceived", () => {
+      if (timer) clearTimeout(timer);
+      timer = setTimeout(() => void runSync(true), 3000);
+    })
+      .then((h) => {
+        handle = h;
+      })
+      .catch(() => {});
+    return () => {
+      if (timer) clearTimeout(timer);
+      void handle?.remove();
+    };
+  }, [runSync]);
+
+  const askPermission = async () => {
+    const p = await requestSmsPermission();
+    setPerm(p);
+    if (p === "granted") {
+      toast({ title: "دسترسی پیامک فعال شد" });
+      void runSync(false);
+    } else if (p === "denied") {
+      toast({
+        title: "دسترسی رد شد",
+        description: "از تنظیمات گوشی ← برنامه‌ها ← حساب‌یار ← مجوزها، دسترسی پیامک را فعال کنید",
+        variant: "destructive",
+      });
+    }
+  };
+
+  if (!mounted || perm === null) return null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <BellRing className="h-4 w-4 text-emerald-700" />
+          خواندن خودکار پیامک بانکی
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        {perm !== "granted" ? (
+          <div className="flex items-start gap-3 rounded-xl border bg-[rgba(254,243,199,0.45)] p-3">
+            <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+            <div className="space-y-2">
+              <p className="text-xs leading-5">
+                برای ثبت خودکار واریز و برداشت، برنامه باید پیامک‌های بانکی را بخواند.
+                هیچ داده‌ای از گوشی شما خارج نمی‌شود و همه‌چیز روی خود دستگاه ذخیره می‌شود.
+              </p>
+              <Button size="sm" onClick={askPermission} className="bg-emerald-700 hover:bg-emerald-800">
+                <ShieldCheck className="ml-1 h-4 w-4" /> اجازه دسترسی به پیامک‌ها
+              </Button>
+            </div>
+          </div>
+        ) : (
+          <>
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                <ShieldCheck className="h-4 w-4 text-emerald-600" />
+                <span>دسترسی فعال — {lastSync > 0 ? `آخرین بررسی: ${new Date(lastSync).toLocaleString("fa-IR")}` : "هنوز بررسی نشده"}</span>
+              </div>
+              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={syncing} onClick={() => void runSync(false)}>
+                <RefreshCw className={`ml-1 h-3 w-3 ${syncing ? "animate-spin" : ""}`} />
+                {syncing ? "در حال بررسی..." : "بررسی الان"}
+              </Button>
+            </div>
+            <div className="flex items-center justify-between rounded-xl border p-3">
+              <div className="pl-3">
+                <div className="text-sm font-medium">ثبت خودکار تراکنش‌ها</div>
+                <p className="text-[11px] leading-4 text-muted-foreground">
+                  پیامک‌های واریز/برداشت با مبلغ واضح، بدون دست وارد شوند؛ موارد نامطمئن در صف بررسی می‌مانند
+                </p>
+              </div>
+              <Switch
+                checked={autoImport}
+                onCheckedChange={(v) => {
+                  setAutoImport(v);
+                  void setMeta("smsAutoImport", v);
+                }}
+              />
+            </div>
+            <div className="flex items-center justify-between rounded-xl border p-3">
+              <div className="pl-3">
+                <div className="text-sm font-medium">تبدیل ریال به تومان</div>
+                <p className="text-[11px] leading-4 text-muted-foreground">
+                  مبالغ پیامک بانک‌ها معمولاً ریال است؛ هنگام ثبت خودکار تقسیم بر ۱۰ می‌شود
+                </p>
+              </div>
+              <Switch
+                checked={convertRial}
+                onCheckedChange={(v) => {
+                  setConvertRial(v);
+                  void setMeta("smsConvertRial", v);
+                }}
+              />
+            </div>
+          </>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 function SmsSection({ accounts }: { accounts: BankAccount[] }) {
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -247,6 +447,9 @@ function SmsSection({ accounts }: { accounts: BankAccount[] }) {
 
   return (
     <div className="space-y-4">
+      {/* خواندن خودکار پیامک (فقط در اپ اندروید نمایش داده می‌شود) */}
+      <SmsAutoSync />
+
       {/* ورود پیامک */}
       <Card>
         <CardHeader className="pb-2">

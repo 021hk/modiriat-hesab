@@ -3,11 +3,13 @@
 export function normalizeDigits(input: string): string {
   const fa = "۰۱۲۳۴۵۶۷۸۹";
   const ar = "٠١٢٣٤٥٦٧٨٩";
-  return input.replace(/[۰-۹٠-٩]/g, (d) => {
-    const fi = fa.indexOf(d);
-    if (fi > -1) return String(fi);
-    return String(ar.indexOf(d));
-  });
+  return input
+    .replace(/[۰-۹٠-٩]/g, (d) => {
+      const fi = fa.indexOf(d);
+      if (fi > -1) return String(fi);
+      return String(ar.indexOf(d));
+    })
+    .replace(/٬/g, ","); // جداکننده هزارگان فارسی
 }
 
 const BANK_NAMES: { key: string; patterns: string[] }[] = [
@@ -46,6 +48,7 @@ export interface SmsParseResult {
   amount: number | null;
   bankName: string | null;
   balance: number | null;
+  unit: "rial" | "toman" | null; // واحد پول متن پیامک (پیامک‌های بانک‌های ایران معمولاً ریال است)
   confidence: number; // 0..1
 }
 
@@ -128,11 +131,16 @@ export function parseBankSms(rawText: string): SmsParseResult {
     if (m3) bankName = m3[1];
   }
 
+  // --- واحد پول ---
+  let unit: "rial" | "toman" | null = null;
+  if (text.includes("ریال") || text.includes("ريال") || /\brial\b|IRR/i.test(text)) unit = "rial";
+  else if (text.includes("تومان")) unit = "toman";
+
   // --- اطمینان ---
   let confidence = 0;
   if (type !== "unknown") confidence += 0.4;
   if (amount !== null && amount > 0) confidence += 0.45;
   if (bankName) confidence += 0.15;
 
-  return { type, amount, bankName, balance, confidence };
+  return { type, amount, bankName, balance, unit, confidence };
 }
