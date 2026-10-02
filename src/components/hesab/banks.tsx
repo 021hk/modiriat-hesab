@@ -94,6 +94,7 @@ function AccountDialog({
   const [cardNumber, setCardNumber] = useState(editing?.cardNumber || "");
   const [accountNumber, setAccountNumber] = useState(editing?.accountNumber || "");
   const [iban, setIban] = useState(editing?.iban || "");
+  const [smsSender, setSmsSender] = useState(editing?.smsSender || "");
   const [initialBalance, setInitialBalance] = useState(
     editing ? formatMoneyPlain(toDisplayAmount(editing.initialBalance)) : ""
   );
@@ -107,6 +108,7 @@ function AccountDialog({
         cardNumber: cardNumber || null,
         accountNumber: accountNumber || null,
         iban: iban || null,
+        smsSender: smsSender.trim() || null,
         initialBalance: toStoredAmount(parseMoneyInput(initialBalance)),
         color,
       };
@@ -163,6 +165,14 @@ function AccountDialog({
           <div className="grid gap-2">
             <Label>شماره شبا (اختیاری)</Label>
             <Input dir="ltr" className="text-left" placeholder="IR..." value={iban} onChange={(e) => setIban(e.target.value)} />
+          </div>
+          <div className="grid gap-2">
+            <Label>شماره فرستنده پیامک بانک (برای خواندن خودکار)</Label>
+            <Input dir="ltr" className="text-left" placeholder="9999, 5000142" value={smsSender} onChange={(e) => setSmsSender(e.target.value)} />
+            <p className="text-xs text-muted-foreground leading-5">
+              فقط پیامک‌های همین شماره(ها) خوانده می‌شود — چند شماره را با کاما جدا کنید. اگر چند حساب در یک بانک دارید،
+              شماره حساب/کارت هر حساب را دقیق وارد کنید تا پیامک‌ها تفکیک شوند.
+            </p>
           </div>
           <div className="grid gap-2">
             <Label>موجودی اولیه ({currencyLabel()})</Label>
@@ -246,10 +256,17 @@ function SmsAutoSync() {
           const parts: string[] = [];
           if (res.imported > 0) parts.push(`${toFa(res.imported)} تراکنش خودکار ثبت شد`);
           if (res.queued > 0) parts.push(`${toFa(res.queued)} پیامک در صف بررسی است`);
+          if (res.skippedForeign > 0) parts.push(`${toFa(res.skippedForeign)} پیامک متعلق به حساب دیگری بود و نادیده گرفته شد`);
           const desc = parts.length > 0 ? parts.join(" — ") : "پیامک بانکی جدیدی نبود";
           if (!silent || res.imported > 0 || res.queued > 0) {
             toast({ title: "پیامک‌ها بررسی شد", description: desc });
           }
+        } else if (!silent && res.reason === "no_senders") {
+          toast({
+            title: "شماره فرستنده پیامک تنظیم نشده است",
+            description: "در ویرایش هر حساب بانکی، شماره فرستنده پیامک آن بانک را وارد کنید تا فقط پیامک‌های همان شماره خوانده شود",
+            variant: "destructive",
+          });
         } else if (!silent && res.reason === "permission") {
           toast({ title: "دسترسی پیامک داده نشده است", variant: "destructive" });
         } else if (!silent && res.reason === "error") {
@@ -744,7 +761,14 @@ export function Banks({ onOpenTxDialog }: { onOpenTxDialog?: () => void }) {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+        <>
+          {accounts.some((a) => !a.smsSender) && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs leading-5 text-amber-900 dark:border-amber-500/40 dark:bg-amber-950/40 dark:text-amber-200">
+              برای خواندن خودکار پیامک، شماره فرستنده پیامک بانک را در ویرایش حساب وارد کنید (مثل 9999).
+              بدون آن هیچ پیامکی خوانده نمی‌شود. اگر چند حساب در یک بانک دارید، شماره حساب/کارت هرکدام را هم وارد کنید تا پیامک‌ها تفکیک شوند.
+            </div>
+          )}
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {accounts.map((acc) => {
             const accTxs = (transactions || []).filter((t) => t.bankAccountId === acc.id);
             const inc = accTxs.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
@@ -782,6 +806,13 @@ export function Banks({ onOpenTxDialog }: { onOpenTxDialog?: () => void }) {
                     </DropdownMenu>
                   </div>
                   {maskedCard && <div dir="ltr" className="mt-2 text-sm tracking-widest text-muted-foreground">{maskedCard}</div>}
+                  {acc.smsSender && (
+                    <div className="mt-2 flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400">
+                      <MessageSquareText className="h-3.5 w-3.5" />
+                      <span dir="ltr">{acc.smsSender}</span>
+                      <span className="text-muted-foreground">— پیامک این شماره خوانده می‌شود</span>
+                    </div>
+                  )}
                   <div className="mt-3 text-2xl font-bold tabular-nums-persian">
                     {formatMoneyU(balance)}
                     <span className="mr-1 text-xs font-normal text-muted-foreground">{currencyLabel()}</span>
@@ -805,7 +836,8 @@ export function Banks({ onOpenTxDialog }: { onOpenTxDialog?: () => void }) {
               </Card>
             );
           })}
-        </div>
+          </div>
+        </>
       )}
 
       <SmsSection accounts={accounts || []} />

@@ -17,6 +17,7 @@ export interface BankAccount {
   accountNumber?: string | null;
   cardNumber?: string | null;
   iban?: string | null;
+  smsSender?: string | null; // شماره(های) فرستنده پیامک بانک — فقط پیامک همین شماره‌ها خوانده می‌شود (جداکننده: کاما)
   initialBalance: number;
   color: string;
   isArchived: boolean;

@@ -61,6 +61,7 @@ export interface SmsParseResult {
   balance: number | null;
   unit: "rial" | "toman" | null; // واحد پول متن پیامک (پیامک‌های بانک‌های ایران معمولاً ریال است)
   accountRef: string | null; // شماره کارت/حساب داخل پیامک (برای تطبیق با حساب کاربر)
+  accountRefDigits: string | null; // فقط ارقام شناسه (بدون نقطه/خط تیره) — مثل 777888139728721
   cardTail: string | null; // ۴ رقم آخر کارت/حساب
   confidence: number; // 0..1
 }
@@ -233,12 +234,14 @@ export function parseBankSms(rawText: string): SmsParseResult {
 
   // ─── شناسه کارت/حساب (برای تطبیق حساب) ───
   let accountRef: string | null = null;
+  let accountRefDigits: string | null = null;
   let cardTail: string | null = null;
   for (const line of lines) {
     if (DATE_LINE_RE.test(line)) continue;
     if (line.match(AMOUNT_LINE_RE)) continue;
     if (ID_LINE_RE.test(line)) {
       accountRef = line;
+      accountRefDigits = line.replace(/\D/g, "") || null;
       const groups = line.split(/[.\-]/);
       const digitsGroups = groups.filter((g) => g.length >= 4);
       if (digitsGroups.length > 0) {
@@ -247,12 +250,22 @@ export function parseBankSms(rawText: string): SmsParseResult {
       break;
     }
   }
-  if (!cardTail) {
-    // «کارت 6037-9971-1234-5678» یا «کارت 12345678» → ۴ رقم آخر
-    const mc = text.match(/کارت\s*[:：]?\s*([\d\-\.]{4,})/);
+  if (!accountRef) {
+    // «کارت 6037-9971-1234-5678» یا «حساب 1234567890» → کامل + ۴ رقم آخر
+    // مراقبت: اگر عدد پشت آن واژه واحد پول دارد (مثل «کارت به کارت 2,000,000 ریال») مبلغ است نه شناسه
+    const mc = text.match(/(?:کارت|حساب)\s*[:：]?\s*([\d\-\.]{4,})\s*(?:ریال|ريال|تومان|rial|IRR)?/i);
     if (mc) {
       const digits = mc[1].replace(/\D/g, "");
-      if (digits.length >= 4) cardTail = digits.slice(-4);
+      const groups = mc[1].split(/[.\-]/).filter(Boolean);
+      const followedByUnit = Boolean(mc[2]);
+      const looksLikeId = !followedByUnit && (digits.length >= 8 || groups.some((g) => g.length >= 4));
+      if (looksLikeId) {
+        accountRef = mc[1].replace(/[.\-]+$/, "");
+        if (digits.length >= 4) {
+          accountRefDigits = digits;
+          cardTail = digits.slice(-4);
+        }
+      }
     }
   }
 
@@ -268,5 +281,5 @@ export function parseBankSms(rawText: string): SmsParseResult {
   if (bankName) confidence += 0.15;
   if (type !== "unknown" && typeFromSign && !bankName) confidence = Math.max(confidence, 0.85);
 
-  return { type, amount, bankName, balance, unit, accountRef, cardTail, confidence };
+  return { type, amount, bankName, balance, unit, accountRef, accountRefDigits, cardTail, confidence };
 }

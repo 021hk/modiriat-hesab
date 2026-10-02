@@ -6,6 +6,7 @@
 
 import { isNativeAndroid, getSmsPermission, readInboxSince, type NativeSms } from "@/lib/native-sms";
 import { parseBankSms } from "@/lib/sms-parser";
+import { parseConfiguredSenders, senderMatches, matchAccountByRef } from "@/lib/sms-match";
 import { dbGetAll, dbPut, getMeta, setMeta, newId, STORES } from "@/lib/local-db";
 import { api, type BankAccount, type SmsLog } from "@/lib/client-api";
 
@@ -15,13 +16,15 @@ const AUTO_CONFIDENCE = 0.85; // نوع + مبلغ مشخص باشد → ثبت 
 
 export interface SmsSyncResult {
   ok: boolean;
-  reason?: "not_native" | "permission" | "error";
+  reason?: "not_native" | "permission" | "error" | "no_senders";
   error?: string;
   total: number; // کل پیامک‌های خوانده‌شده
-  bankCount: number; // پیامک‌های مرتبط با بانک
+  bankCount: number; // پیامک‌های شماره‌های تنظیم‌شده
   imported: number; // خودکار ثبت شدند
   queued: number; // به صف بررسی رفتند
   skipped: number; // غیر مرتبط (شخصی/تبلیغ/کد)
+  skippedSender: number; // از شماره‌هایی که کاربر تنظیم نکرده — اصلاً خوانده نمی‌شوند
+  skippedForeign: number; // پیامک حساب دیگری در همان شماره (شماره حساب داخلش با حساب‌های ما نمی‌خواند)
 }
 
 // فرستنده شخصی (شماره موبایل/خط ثابت) ≠ فرستنده بانک (کد کوتاه یا نام لاتین)
@@ -55,34 +58,22 @@ function isJunk(text: string): boolean {
   return JUNK_PATTERNS.some((p) => lower.includes(p));
 }
 
-// تطبیق نام بانک/کارت پارس‌شده با حساب‌های ثبت‌شده کاربر
-function matchAccount(
+// تطبیق نام بانک/کارت پارس‌شده با حساب‌های ثبت‌شده کاربر — فقط وقتی پیامک اصلاً شناسه حساب/کارت ندارد
+// (اگر شناسه داشته باشد ولی با حساب‌های کاربر نخواند، باید رد شود — نه تطبیق با نام بانک)
+function matchAccountWithoutRef(
   accounts: BankAccount[],
-  bankName: string | null,
-  cardTail: string | null
+  bankName: string | null
 ): string | null {
-  // اولویت ۱: تطبیق ۴ رقم آخر کارت/حساب
-  if (cardTail) {
-    const tail = cardTail.replace(/\D/g, "");
-    if (tail.length >= 3) {
-      const hit = accounts.find((a) => {
-        const card = (a.cardNumber || "").replace(/\D/g, "");
-        const accNum = (a.accountNumber || "").replace(/\D/g, "");
-        return (card.length >= 4 && card.endsWith(tail)) || (accNum.length >= 4 && accNum.endsWith(tail));
-      });
-      if (hit) return hit.id;
-    }
-  }
-  // اولویت ۲: تطبیق نام بانک
   if (!bankName) return null;
   const bn = bankName.replace(/\./g, "").trim();
   if (!bn) return null;
-  const hit = accounts.find((a) => {
+  const hits = accounts.filter((a) => {
     const an = (a.bankName || "").trim();
     if (!an) return false;
     return an.includes(bn) || bn.includes(an);
   });
-  return hit ? hit.id : null;
+  // فقط وقتی دقیقاً یک حساب آن بانک داریم قطعی است؛ با چند حساب حدس زدن ممنوع
+  return hits.length === 1 ? hits[0].id : null;
 }
 
 export interface SyncOptions {
@@ -103,11 +94,24 @@ export function syncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
 
 async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
   const autoImport = options?.autoImport !== false;
-  const empty = { total: 0, bankCount: 0, imported: 0, queued: 0, skipped: 0 };
+  const empty = { total: 0, bankCount: 0, imported: 0, queued: 0, skipped: 0, skippedSender: 0, skippedForeign: 0 };
 
   if (!isNativeAndroid()) return { ok: false, reason: "not_native", ...empty };
   const perm = await getSmsPermission();
   if (perm !== "granted") return { ok: false, reason: "permission", ...empty };
+
+  let accounts: BankAccount[] = [];
+  try {
+    accounts = await api.get<BankAccount[]>("/api/bank-accounts");
+  } catch {
+    accounts = [];
+  }
+
+  // ─── فیلتر شماره فرستنده: فقط شماره‌هایی که کاربر روی حساب‌هایش تنظیم کرده ───
+  const configuredSenders = accounts.flatMap((a) => parseConfiguredSenders(a.smsSender));
+  if (accounts.length === 0 || configuredSenders.length === 0) {
+    return { ok: false, reason: "no_senders", ...empty };
+  }
 
   const now = Date.now();
   const last = (await getMeta<number>(LAST_SYNC_KEY)) || 0;
@@ -128,24 +132,20 @@ async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
   const seenNative = new Set<string>();
   for (const l of existing) if (l.nativeId) seenNative.add(l.nativeId);
 
-  let accounts: BankAccount[] = [];
-  try {
-    accounts = await api.get<BankAccount[]>("/api/bank-accounts");
-  } catch {
-    accounts = [];
-  }
-
   let imported = 0;
   let queued = 0;
   let bankCount = 0;
   let skipped = 0;
+  let skippedSender = 0;
+  let skippedForeign = 0;
   let maxDate = since;
 
   for (const msg of sorted) {
     if (msg.date > maxDate) maxDate = msg.date;
 
-    if (!msg.body || isPersonalSender(msg.sender)) {
-      skipped++;
+    // ─── فقط شماره‌های تنظیم‌شده — بقیه پیامک‌ها اصلاً بررسی نمی‌شوند ───
+    if (!msg.body || !senderMatches(msg.sender, configuredSenders)) {
+      skippedSender++;
       continue;
     }
     const text = msg.body.trim();
@@ -165,6 +165,21 @@ async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
       bankCount++; // متن بانکی ولی بدون مبلغ مشخص → صف نمی‌شود
       continue;
     }
+
+    // ─── تفکیک حساب‌ها داخل یک شماره ───
+    // اگر پیامک شماره حساب/کارت دارد، باید با یکی از حساب‌های خودمان بخواند؛ وگرنه مال حساب دیگری است → رد
+    let accountId: string | null = null;
+    if (parsed.accountRefDigits || parsed.cardTail) {
+      accountId = matchAccountByRef(accounts, parsed.accountRefDigits, parsed.cardTail);
+      if (!accountId) {
+        skippedForeign++; // پیامک حساب دیگری (مثلاً حساب دیگر اعضای خانواده در همان شماره بانک)
+        continue;
+      }
+    } else {
+      // بدون شناسه: فقط اگر دقیقاً یک حساب این شماره/بانک باشد قطعی است
+      accountId = matchAccountWithoutRef(accounts, parsed.bankName);
+    }
+
     bankCount++;
 
     // واحد پول: مبالغ همیشه به «ریال» ذخیره می‌شوند (نمایش بر اساس تنظیم کاربر تبدیل می‌شود)
@@ -195,7 +210,7 @@ async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
         amount: finalAmount,
         purpose: parsed.bankName ? `پیامک بانک ${parsed.bankName}` : "ثبت خودکار پیامک",
         categoryId: null,
-        bankAccountId: matchAccount(accounts, parsed.bankName, parsed.cardTail),
+        bankAccountId: accountId,
         date: dateIso,
         source: "sms" as const,
         rawSms: text,
@@ -219,7 +234,7 @@ async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
   const newSyncPoint = Math.min(Math.max(maxDate, since), Date.now());
   if (newSyncPoint > since) await setMeta(LAST_SYNC_KEY, newSyncPoint);
 
-  return { ok: true, total: messages.length, bankCount, imported, queued, skipped };
+  return { ok: true, total: messages.length, bankCount, imported, queued, skipped, skippedSender, skippedForeign };
 }
 
 // آخرین همگام‌سازی (برای نمایش)

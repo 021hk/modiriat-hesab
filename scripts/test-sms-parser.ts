@@ -112,5 +112,56 @@ const r18 = parseBankSms("دريافت 800,000 ريال — موجودي 9,000,0
 check("دریافت عربی: نوع", r18.type, "income");
 check("دریافت عربی: مبلغ", r18.amount, 800000);
 
+// ─── ۱۹) ارقام شناسه بدون نقطه (پارسر v3) ───
+check("نمونه کاربر: ارقام کامل شناسه", r1.accountRefDigits, "777888139728721");
+const r19 = parseBankSms("حساب 1234567890\nبرداشت 250,000 ریال\nمانده: 1,000,000 ریال");
+check("الگوی «حساب ...»: شناسه", r19.accountRef, "1234567890");
+check("الگوی «حساب ...»: ارقام", r19.accountRefDigits, "1234567890");
+check("الگوی «حساب ...»: نوع", r19.type, "expense");
+
+// ─── ۲۰) خرید (کلیدواژه) ───
+const r20 = parseBankSms("خرید 850,000 ریال توسط کارت 6037-9971-1234-5678 در فروشگاه");
+check("خرید: نوع = برداشت", r20.type, "expense");
+check("خرید: مبلغ", r20.amount, 850000);
+
+// ═══════════════ تطبیق حساب / تفکیک چند حساب در یک شماره (sms-match) ═══════════════
+import { digitsOnly, normalizeSender, parseConfiguredSenders, senderMatches, matchAccountByRef } from "../src/lib/sms-match";
+
+// شبیه‌سازی: بانک X شماره فرستنده 9999 — کاربر دو حساب دارد + حساب دیگر اعضای خانواده هم پیامک می‌دهد
+const myAccounts = [
+  { id: "acc-1", bankName: "ملت", cardNumber: "6104-3379-1234-2872", accountNumber: "77788813972872" },
+  { id: "acc-2", bankName: "ملت", cardNumber: "6104-3379-9876-7754", accountNumber: "333444555666" },
+];
+
+check("digitsOnly: فارسی", digitsOnly("۷۷۷.۸۸۸"), "777888");
+check("digitsOnly: خط تیره", digitsOnly("6037-9971-1234-5678"), "6037997112345678");
+check("normalizeSender: +98 و فاصله", normalizeSender("+98 5000-5412"), "9850005412");
+check("parseConfiguredSenders: چند شماره", parseConfiguredSenders("9999، 5000142, +98700077"), ["9999", "5000142", "+98700077"]);
+
+check("فرستنده: دقیق", senderMatches("9999", ["9999"]), true);
+check("فرستنده: با کد کشور معادل است", senderMatches("+989999", ["9999"]), true);
+check("فرستنده: موبایل شخصی رد", senderMatches("09123456789", ["9999"]), false);
+check("فرستنده: ۸ رقمی با کد کشور", senderMatches("+9850005412", ["50005412"]), true);
+check("فرستنده: نام لاتین", senderMatches("BPMELLAT", ["bpmellat"]), true);
+check("فرستنده: ناشناس رد", senderMatches("7777", ["9999"]), false);
+
+// پیامک خودمان (شماره حساب داخلش با حساب ۱ می‌خواند) → پذیرفته شود
+const myRef = parseBankSms("777.888.13972872.1\n-473,000\n07/10_02:10\nمانده: 66,663,400");
+check("تفکیک: پیامک حساب خودم → حساب ۱", matchAccountByRef(myAccounts, myRef.accountRefDigits, myRef.cardTail), "acc-1");
+
+// پیامک حساب دیگری در همان شماره 9999 (شناسه‌اش با هیچ حساب ما نمی‌خواند) → null
+const foreignRef = parseBankSms("555.666.11112233.9\n-900,000\n07/10_03:15\nمانده: 12,000,000");
+check("تفکیک: پیامک حساب دیگر → رد", matchAccountByRef(myAccounts, foreignRef.accountRefDigits, foreignRef.cardTail), null);
+
+// پیامک با شناسه ناقص (فقط ۴ رقم آخر) → تطبیق دُم
+check("تفکیک: فقط ۴ رقم آخر", matchAccountByRef(myAccounts, null, "7754"), "acc-2");
+
+// بدون شناسه اصلاً → null (نباید حدس بزند)
+check("تفکیک: بدون شناسه → رد/صف", matchAccountByRef(myAccounts, null, null), null);
+
+// شبا هم تطبیق داده می‌شود
+const ibanAccounts = [{ id: "acc-3", cardNumber: null, accountNumber: null, iban: "IR120570028280101723123123" }];
+check("تفکیک: تطبیق با شبا", matchAccountByRef(ibanAccounts, "0570028280101723123123", null), "acc-3");
+
 console.log(`\nنتیجه: ${pass} موفق، ${failCount} ناموفق`);
 if (failCount > 0) process.exit(1);
