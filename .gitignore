@@ -40,7 +40,9 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
-local-*
+local-*.db
+local-*.sqlite
+!src/lib/local-*
 .claude
 .z-ai-config
 *.log
@@ -66,3 +68,4 @@ android/.gradle/
 android/app/src/main/assets/public/
 assets/generated/
 *.keystore
+!android/hesabyar.keystore

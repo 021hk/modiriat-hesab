@@ -158,18 +158,22 @@
 
 @layer base {
   html {
-    /* جلوگیری از پس‌زمینه سیاه در حالت تاریک سیستم روی اندروید */
     color-scheme: light;
     background-color: #f4f8f6;
+  }
+  html.dark {
+    color-scheme: dark;
+    background-color: #0b1410;
   }
   * {
     @apply border-border;
     outline-color: #00885e;
   }
+  .dark * {
+    outline-color: #37b78a;
+  }
   body {
     @apply bg-background text-foreground;
-    background-color: #f4f8f6;
-    color: #0e1913;
     font-family: "Vazirmatn", "Tahoma", "Segoe UI", sans-serif;
   }
   /* اسکرول‌بار سفارشی */
@@ -186,6 +190,12 @@
   }
   ::-webkit-scrollbar-thumb:hover {
     background: #799789;
+  }
+  .dark ::-webkit-scrollbar-thumb {
+    background: #3a4640;
+  }
+  .dark ::-webkit-scrollbar-thumb:hover {
+    background: #55645c;
   }
 }
 

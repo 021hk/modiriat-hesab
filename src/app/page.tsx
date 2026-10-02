@@ -5,13 +5,13 @@ import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/reac
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { useQuery } from "@tanstack/react-query";
-import { LayoutDashboard, ArrowLeftRight, HandCoins, Landmark, Tags, DatabaseBackup, Wallet } from "lucide-react";
+import { LayoutDashboard, ArrowLeftRight, HandCoins, Landmark, Tags, Settings as SettingsIcon, Wallet } from "lucide-react";
 import { Dashboard } from "@/components/hesab/dashboard";
 import { Transactions } from "@/components/hesab/transactions";
 import { Debts } from "@/components/hesab/debts";
 import { Banks } from "@/components/hesab/banks";
 import { Categories } from "@/components/hesab/categories";
-import { Backup } from "@/components/hesab/backup";
+import { Settings } from "@/components/hesab/settings";
 import { TxDialog } from "@/components/hesab/transactions";
 import { api, type Category, type BankAccount } from "@/lib/client-api";
 import { isNativeAndroid, getSmsPermission } from "@/lib/native-sms";
@@ -24,7 +24,7 @@ const TABS = [
   { value: "debts", label: "بدهی‌ها", icon: HandCoins },
   { value: "banks", label: "حساب و پیامک", icon: Landmark },
   { value: "categories", label: "دسته‌بندی", icon: Tags },
-  { value: "backup", label: "پشتیبان", icon: DatabaseBackup },
+  { value: "settings", label: "تنظیمات", icon: SettingsIcon },
 ];
 
 function AppContent() {
@@ -68,7 +68,7 @@ function AppContent() {
   return (
     <div className="flex min-h-screen flex-col">
       {/* هدر */}
-      <header className="sticky top-0 z-20 border-b bg-[rgba(255,255,255,0.9)] backdrop-blur">
+      <header className="sticky top-0 z-20 border-b bg-background/90 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
           <div className="flex items-center gap-2.5">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-bl from-emerald-500 to-emerald-700 text-white shadow">
@@ -117,14 +117,14 @@ function AppContent() {
           <TabsContent value="categories">
             <Categories />
           </TabsContent>
-          <TabsContent value="backup">
-            <Backup />
+          <TabsContent value="settings">
+            <Settings />
           </TabsContent>
         </Tabs>
       </main>
 
       {/* ناوبری پایین موبایل */}
-      <nav className="fixed inset-x-0 bottom-0 z-20 border-t bg-[rgba(255,255,255,0.95)] backdrop-blur lg:hidden" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+      <nav className="fixed inset-x-0 bottom-0 z-20 border-t bg-background/95 backdrop-blur lg:hidden" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
         <div className="mx-auto grid max-w-lg grid-cols-6">
           {TABS.map((t) => (
             <button
@@ -144,7 +144,7 @@ function AppContent() {
       {/* فوتر */}
       <footer className="mt-auto hidden border-t bg-card py-4 lg:block">
         <div className="mx-auto max-w-6xl px-4 text-center text-xs text-muted-foreground">
-          حساب‌یار — نسخه ۲.۱.۰ | اپلیکیشن آفلاین — ثبت خودکار پیامک بانکی
+          حساب‌یار — نسخه ۲.۲.۰ | اپلیکیشن آفلاین — ثبت خودکار پیامک بانکی
         </div>
       </footer>
 

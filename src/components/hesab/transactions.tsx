@@ -31,7 +31,16 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { Plus, MoreVertical, Pencil, Trash2, Search, MessageSquareText } from "lucide-react";
 import { api, type Transaction, type Category, type BankAccount } from "@/lib/client-api";
-import { formatMoney, parseMoneyInput, formatMoneyPlain, formatDateFa } from "@/lib/format";
+import {
+  formatMoney,
+  formatMoneyPlain,
+  formatMoneyU,
+  parseMoneyInput,
+  formatDateFa,
+  currencyLabel,
+  toDisplayAmount,
+  toStoredAmount,
+} from "@/lib/format";
 
 function TxDialog({
   open,
@@ -52,7 +61,11 @@ function TxDialog({
   const qc = useQueryClient();
   const [type, setType] = useState<"income" | "expense">(preset?.type || editing?.type || "expense");
   const [amount, setAmount] = useState(
-    preset?.amount ? formatMoneyPlain(preset.amount) : editing ? formatMoneyPlain(editing.amount) : ""
+    preset?.amount
+      ? formatMoneyPlain(toDisplayAmount(preset.amount))
+      : editing
+        ? formatMoneyPlain(toDisplayAmount(editing.amount))
+        : ""
   );
   const [purpose, setPurpose] = useState(preset?.purpose || editing?.purpose || "");
   const [categoryId, setCategoryId] = useState(editing?.categoryId || "");
@@ -66,7 +79,7 @@ function TxDialog({
     mutationFn: async () => {
       const body = {
         type,
-        amount: parseMoneyInput(amount),
+        amount: toStoredAmount(parseMoneyInput(amount)),
         purpose: purpose || null,
         categoryId: categoryId || null,
         bankAccountId: bankAccountId || null,
@@ -99,7 +112,9 @@ function TxDialog({
               type="button"
               onClick={() => setType("expense")}
               className={`rounded-xl border-2 p-3 text-sm font-medium transition ${
-                type === "expense" ? "border-red-500 bg-red-50 text-red-700" : "border-border text-muted-foreground"
+                type === "expense"
+                  ? "border-red-500 bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300"
+                  : "border-border text-muted-foreground"
               }`}
             >
               − برداشت / هزینه
@@ -108,7 +123,9 @@ function TxDialog({
               type="button"
               onClick={() => setType("income")}
               className={`rounded-xl border-2 p-3 text-sm font-medium transition ${
-                type === "income" ? "border-emerald-500 bg-emerald-50 text-emerald-700" : "border-border text-muted-foreground"
+                type === "income"
+                  ? "border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+                  : "border-border text-muted-foreground"
               }`}
             >
               + واریز / درآمد
@@ -116,7 +133,7 @@ function TxDialog({
           </div>
 
           <div className="grid gap-2">
-            <Label htmlFor="amount">مبلغ (تومان)</Label>
+            <Label htmlFor="amount">مبلغ ({currencyLabel()})</Label>
             <Input
               id="amount"
               inputMode="numeric"
@@ -317,7 +334,9 @@ export function Transactions({ categories, accounts }: { categories: Category[];
                 <div className="flex items-center gap-3">
                   <div
                     className={`flex h-10 w-10 items-center justify-center rounded-xl font-bold ${
-                      tx.type === "income" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-600"
+                      tx.type === "income"
+                        ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300"
+                        : "bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-300"
                     }`}
                   >
                     {tx.type === "income" ? "+" : "−"}
@@ -342,10 +361,10 @@ export function Transactions({ categories, accounts }: { categories: Category[];
                 <div className="flex items-center gap-1">
                   <span
                     className={`text-base font-bold tabular-nums-persian ${
-                      tx.type === "income" ? "text-emerald-700" : "text-red-600"
+                      tx.type === "income" ? "text-emerald-700 dark:text-emerald-300" : "text-red-600 dark:text-red-400"
                     }`}
                   >
-                    {formatMoney(tx.amount)}
+                    {formatMoneyU(tx.amount)}
                   </span>
                   <DropdownMenu>
                     <DropdownMenuTrigger asChild>

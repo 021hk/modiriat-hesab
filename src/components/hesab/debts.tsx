@@ -37,7 +37,16 @@ import {
   X,
 } from "lucide-react";
 import { api, compressImage, type Debt, type Attachment } from "@/lib/client-api";
-import { formatMoney, parseMoneyInput, formatMoneyPlain, formatDateFa } from "@/lib/format";
+import {
+  formatMoney,
+  formatMoneyU,
+  parseMoneyInput,
+  formatMoneyPlain,
+  formatDateFa,
+  currencyLabel,
+  toDisplayAmount,
+  toStoredAmount,
+} from "@/lib/format";
 
 type DebtFormState = {
   name: string;
@@ -71,7 +80,7 @@ function DebtDialog({
   const [form, setForm] = useState<DebtFormState>({
     name: editing?.name || "",
     type: editing?.type || "debtor",
-    amount: editing ? formatMoneyPlain(editing.amount) : "",
+    amount: editing ? formatMoneyPlain(toDisplayAmount(editing.amount)) : "",
     phone: editing?.phone || "",
     description: editing?.description || "",
     dueDate: editing?.dueDate ? editing.dueDate.slice(0, 10) : "",
@@ -82,7 +91,7 @@ function DebtDialog({
       const body = {
         name: form.name,
         type: form.type,
-        amount: parseMoneyInput(form.amount),
+        amount: toStoredAmount(parseMoneyInput(form.amount)),
         phone: form.phone || null,
         description: form.description || null,
         dueDate: form.dueDate ? new Date(form.dueDate).toISOString() : null,
@@ -111,7 +120,9 @@ function DebtDialog({
               type="button"
               onClick={() => setForm({ ...form, type: "debtor" })}
               className={`rounded-xl border-2 p-3 text-sm font-medium transition ${
-                form.type === "debtor" ? "border-amber-500 bg-amber-50 text-amber-800" : "border-border text-muted-foreground"
+                form.type === "debtor"
+                  ? "border-amber-500 bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+                  : "border-border text-muted-foreground"
               }`}
             >
               بدهکار <span className="block text-[10px] opacity-70">به من بدهکار است (طلب من)</span>
@@ -120,7 +131,9 @@ function DebtDialog({
               type="button"
               onClick={() => setForm({ ...form, type: "creditor" })}
               className={`rounded-xl border-2 p-3 text-sm font-medium transition ${
-                form.type === "creditor" ? "border-orange-500 bg-orange-50 text-orange-800" : "border-border text-muted-foreground"
+                form.type === "creditor"
+                  ? "border-orange-500 bg-orange-50 text-orange-800 dark:bg-orange-950/40 dark:text-orange-300"
+                  : "border-border text-muted-foreground"
               }`}
             >
               طلبکار <span className="block text-[10px] opacity-70">من بدهکار او هستم (بدهی من)</span>
@@ -135,7 +148,7 @@ function DebtDialog({
             />
           </div>
           <div className="grid gap-2">
-            <Label>مبلغ کل (تومان)</Label>
+            <Label>مبلغ کل ({currencyLabel()})</Label>
             <Input
               inputMode="numeric"
               dir="ltr"
@@ -199,7 +212,7 @@ function PaymentDialog({ debt, open, onOpenChange }: { debt: Debt; open: boolean
   const remaining = debt.amount - debt.paidAmount;
 
   const mutation = useMutation({
-    mutationFn: () => api.put(`/api/debts/${debt.id}`, { addPayment: parseMoneyInput(amount) }),
+    mutationFn: () => api.put(`/api/debts/${debt.id}`, { addPayment: toStoredAmount(parseMoneyInput(amount)) }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["debts"] });
       qc.invalidateQueries({ queryKey: ["stats"] });
@@ -217,13 +230,13 @@ function PaymentDialog({ debt, open, onOpenChange }: { debt: Debt; open: boolean
           <DialogTitle>ثبت پرداخت از {debt.name}</DialogTitle>
         </DialogHeader>
         <p className="text-sm text-muted-foreground">
-          مانده بدهی: <span className="font-bold text-foreground tabular-nums-persian">{formatMoney(remaining)}</span> تومان
+          مانده بدهی: <span className="font-bold text-foreground tabular-nums-persian">{formatMoneyU(remaining)}</span> {currencyLabel()}
         </p>
         <Input
           inputMode="numeric"
           dir="ltr"
           className="text-left font-bold tabular-nums-persian"
-          placeholder={formatMoneyPlain(remaining)}
+          placeholder={formatMoneyPlain(toDisplayAmount(remaining))}
           value={amount ? formatMoneyPlain(parseMoneyInput(amount)) : ""}
           onChange={(e) => setAmount(e.target.value)}
         />
@@ -337,7 +350,9 @@ function DebtCard({ debt }: { debt: Debt }) {
           <div className="flex items-center gap-3">
             <div
               className={`flex h-11 w-11 items-center justify-center rounded-full font-bold text-lg ${
-                isDebtor ? "bg-amber-100 text-amber-800" : "bg-orange-100 text-orange-800"
+                isDebtor
+                  ? "bg-amber-100 text-amber-800 dark:bg-amber-900/40 dark:text-amber-300"
+                  : "bg-orange-100 text-orange-800 dark:bg-orange-900/40 dark:text-orange-300"
               }`}
             >
               {debt.name.trim().charAt(0) || "؟"}
@@ -345,18 +360,22 @@ function DebtCard({ debt }: { debt: Debt }) {
             <div>
               <div className="flex items-center gap-2">
                 <span className="font-bold">{debt.name}</span>
-                <Badge className={isDebtor ? "bg-amber-100 text-amber-800 hover:bg-amber-100" : "bg-orange-100 text-orange-800 hover:bg-orange-100"}>
+                <Badge className={
+                  isDebtor
+                    ? "bg-amber-100 text-amber-800 hover:bg-amber-100 dark:bg-amber-900/40 dark:text-amber-300"
+                    : "bg-orange-100 text-orange-800 hover:bg-orange-100 dark:bg-orange-900/40 dark:text-orange-300"
+                }>
                   {isDebtor ? "بدهکار (طلب من)" : "طلبکار (بدهی من)"}
                 </Badge>
                 {debt.isSettled && (
-                  <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
+                  <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100 dark:bg-emerald-900/50 dark:text-emerald-300">
                     <CheckCircle2 className="ml-1 h-3 w-3" /> تسویه شد
                   </Badge>
                 )}
               </div>
               <div className="mt-0.5 text-sm text-muted-foreground tabular-nums-persian">
-                کل: {formatMoney(debt.amount)} تومان
-                {debt.paidAmount > 0 && <span className="mr-2">| پرداخت‌شده: {formatMoney(debt.paidAmount)}</span>}
+                کل: {formatMoneyU(debt.amount)} {currencyLabel()}
+                {debt.paidAmount > 0 && <span className="mr-2">| پرداخت‌شده: {formatMoneyU(debt.paidAmount)}</span>}
               </div>
             </div>
           </div>
@@ -397,7 +416,7 @@ function DebtCard({ debt }: { debt: Debt }) {
             <Progress value={pct} className="h-2" />
             <div className="flex justify-between text-xs text-muted-foreground">
               <span>
-                مانده: <span className={`font-bold tabular-nums-persian ${isDebtor ? "text-amber-700" : "text-orange-700"}`}>{formatMoney(remaining)}</span> تومان
+                مانده: <span className={`font-bold tabular-nums-persian ${isDebtor ? "text-amber-700 dark:text-amber-300" : "text-orange-700 dark:text-orange-300"}`}>{formatMoneyU(remaining)}</span> {currencyLabel()}
               </span>
               <span>{Math.round(pct)}٪ پرداخت‌شده</span>
             </div>
@@ -496,8 +515,6 @@ function DebtDialogWrapper({ debt, open, onOpenChange }: { debt: Debt; open: boo
 export function Debts() {
   const [filter, setFilter] = useState("all");
   const [addOpen, setAddOpen] = useState(false);
-  const { toast } = useToast();
-  const qc = useQueryClient();
 
   const params = new URLSearchParams();
   if (filter === "debtor" || filter === "creditor") params.set("type", filter);
@@ -508,13 +525,6 @@ export function Debts() {
     queryKey: ["debts", filter],
     queryFn: () => api.get(`/api/debts?${params.toString()}`),
   });
-
-  const seedMutation = useMutation({
-    mutationFn: () =>
-      api.post("/api/categories", { name: "دسته نمونه", type: "expense" }),
-    onSuccess: () => qc.invalidateQueries({ queryKey: ["categories"] }),
-  });
-  void seedMutation;
 
   const filters = [
     { v: "all", label: "همه" },

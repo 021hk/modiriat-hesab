@@ -50,7 +50,15 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { api, type BankAccount, type SmsLog, type Transaction } from "@/lib/client-api";
-import { formatMoney, parseMoneyInput, formatMoneyPlain } from "@/lib/format";
+import {
+  formatMoney,
+  formatMoneyU,
+  parseMoneyInput,
+  formatMoneyPlain,
+  currencyLabel,
+  toDisplayAmount,
+  toStoredAmount,
+} from "@/lib/format";
 import {
   HesabSms,
   isNativeAndroid,
@@ -87,7 +95,7 @@ function AccountDialog({
   const [accountNumber, setAccountNumber] = useState(editing?.accountNumber || "");
   const [iban, setIban] = useState(editing?.iban || "");
   const [initialBalance, setInitialBalance] = useState(
-    editing ? formatMoneyPlain(editing.initialBalance) : ""
+    editing ? formatMoneyPlain(toDisplayAmount(editing.initialBalance)) : ""
   );
   const [color, setColor] = useState(editing?.color || COLORS[0]);
 
@@ -99,7 +107,7 @@ function AccountDialog({
         cardNumber: cardNumber || null,
         accountNumber: accountNumber || null,
         iban: iban || null,
-        initialBalance: parseMoneyInput(initialBalance),
+        initialBalance: toStoredAmount(parseMoneyInput(initialBalance)),
         color,
       };
       if (editing) return api.put(`/api/bank-accounts/${editing.id}`, body);
@@ -157,7 +165,7 @@ function AccountDialog({
             <Input dir="ltr" className="text-left" placeholder="IR..." value={iban} onChange={(e) => setIban(e.target.value)} />
           </div>
           <div className="grid gap-2">
-            <Label>موجودی اولیه (تومان)</Label>
+            <Label>موجودی اولیه ({currencyLabel()})</Label>
             <Input
               inputMode="numeric"
               dir="ltr"
@@ -216,13 +224,12 @@ function SmsAutoSync() {
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState(0);
   const [autoImport, setAutoImport] = useState(true);
-  const [convertRial, setConvertRial] = useState(true);
 
   const syncingRef = useRef(false);
-  const optsRef = useRef({ autoImport: true, convertRial: true });
+  const optsRef = useRef({ autoImport: true });
   useEffect(() => {
-    optsRef.current = { autoImport, convertRial };
-  }, [autoImport, convertRial]);
+    optsRef.current = { autoImport };
+  }, [autoImport]);
 
   const runSync = useCallback(
     async (silent: boolean) => {
@@ -263,16 +270,14 @@ function SmsAutoSync() {
     if (!isNativeAndroid()) return;
     setMounted(true);
     void (async () => {
-      const [p, ls, ai, cr] = await Promise.all([
+      const [p, ls, ai] = await Promise.all([
         getSmsPermission(),
         getLastSmsSync(),
         getMeta<boolean>("smsAutoImport"),
-        getMeta<boolean>("smsConvertRial"),
       ]);
       setPerm(p);
       setLastSync(ls || 0);
       if (ai === false) setAutoImport(false);
-      if (cr === false) setConvertRial(false);
       if (p === "granted") void runSync(true);
     })();
   }, [runSync]);
@@ -323,7 +328,7 @@ function SmsAutoSync() {
       </CardHeader>
       <CardContent className="space-y-3">
         {perm !== "granted" ? (
-          <div className="flex items-start gap-3 rounded-xl border bg-[rgba(254,243,199,0.45)] p-3">
+          <div className="flex items-start gap-3 rounded-xl border bg-amber-50 p-3 dark:bg-amber-950/30">
             <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
             <div className="space-y-2">
               <p className="text-xs leading-5">
@@ -362,21 +367,6 @@ function SmsAutoSync() {
                 }}
               />
             </div>
-            <div className="flex items-center justify-between rounded-xl border p-3">
-              <div className="pl-3">
-                <div className="text-sm font-medium">تبدیل ریال به تومان</div>
-                <p className="text-[11px] leading-4 text-muted-foreground">
-                  مبالغ پیامک بانک‌ها معمولاً ریال است؛ هنگام ثبت خودکار تقسیم بر ۱۰ می‌شود
-                </p>
-              </div>
-              <Switch
-                checked={convertRial}
-                onCheckedChange={(v) => {
-                  setConvertRial(v);
-                  void setMeta("smsConvertRial", v);
-                }}
-              />
-            </div>
           </>
         )}
       </CardContent>
@@ -390,6 +380,7 @@ function SmsSection({ accounts }: { accounts: BankAccount[] }) {
   const [text, setText] = useState("");
   const [preview, setPreview] = useState<{ type: string; amount: number | null; bankName: string | null; confidence: number } | null>(null);
   const [importLog, setImportLog] = useState<SmsLog | null>(null);
+  const [importType, setImportType] = useState<"income" | "expense">("expense");
   const [importAmount, setImportAmount] = useState("");
   const [importPurpose, setImportPurpose] = useState("");
   const [importAccount, setImportAccount] = useState("");
@@ -472,7 +463,7 @@ function SmsSection({ accounts }: { accounts: BankAccount[] }) {
             onChange={(e) => setText(e.target.value)}
           />
           {preview && (
-            <div className="rounded-xl border bg-[rgba(236,242,238,0.5)] p-3 text-sm">
+            <div className="rounded-xl border bg-muted/50 p-3 text-sm">
               <div className="mb-1 flex items-center gap-1.5 font-medium text-emerald-800">
                 <Sparkles className="h-4 w-4" /> نتیجه تشخیص خودکار
               </div>
@@ -483,7 +474,7 @@ function SmsSection({ accounts }: { accounts: BankAccount[] }) {
                 </div>
                 <div>
                   <div className="text-xs text-muted-foreground">مبلغ</div>
-                  <div className="font-bold tabular-nums-persian">{preview.amount ? formatMoney(preview.amount) : "نامشخص"}</div>
+                  <div className="font-bold tabular-nums-persian">{preview.amount ? formatMoneyU(preview.amount) : "نامشخص"}</div>
                 </div>
                 <div>
                   <div className="text-xs text-muted-foreground">بانک</div>
@@ -531,11 +522,11 @@ function SmsSection({ accounts }: { accounts: BankAccount[] }) {
                     <Badge variant={log.parsedType === "income" ? "default" : "destructive"} className={log.parsedType === "income" ? "bg-emerald-700" : ""}>
                       {log.parsedType === "income" ? "واریز" : log.parsedType === "expense" ? "برداشت" : "نامشخص"}
                     </Badge>
-                    <span className="font-bold tabular-nums-persian">{log.parsedAmount ? formatMoney(log.parsedAmount) : "؟"}</span>
+                    <span className="font-bold tabular-nums-persian">{log.parsedAmount ? formatMoneyU(log.parsedAmount) : "؟"}</span>
                     {log.bankName && <span className="text-muted-foreground">• بانک {log.bankName}</span>}
                   </div>
                   <div className="flex gap-1">
-                    <Button size="sm" className="h-7 bg-emerald-700 text-xs hover:bg-emerald-800" onClick={() => { setImportAmount(log.parsedAmount ? formatMoneyPlain(log.parsedAmount) : ""); setImportLog(log); }}>
+                    <Button size="sm" className="h-7 bg-emerald-700 text-xs hover:bg-emerald-800" onClick={() => { setImportType(log.parsedType === "income" ? "income" : "expense"); setImportAmount(log.parsedAmount ? formatMoneyPlain(toDisplayAmount(log.parsedAmount)) : ""); setImportLog(log); }}>
                       <Download className="ml-1 h-3 w-3" /> ثبت تراکنش
                     </Button>
                     <Button
@@ -569,7 +560,7 @@ function SmsSection({ accounts }: { accounts: BankAccount[] }) {
                 <span className="line-clamp-1 max-w-[60%] text-muted-foreground">{log.rawText}</span>
                 <div className="flex items-center gap-2">
                   {log.status === "imported" ? (
-                    <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
+                    <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100 dark:bg-emerald-900/50 dark:text-emerald-300">
                       <CheckCheck className="ml-1 h-3 w-3" /> ثبت شد
                     </Badge>
                   ) : (
@@ -596,15 +587,36 @@ function SmsSection({ accounts }: { accounts: BankAccount[] }) {
               <p className="rounded-lg bg-muted p-2 text-xs leading-5 text-muted-foreground">{importLog.rawText}</p>
               <div className="grid grid-cols-2 gap-3">
                 <div className="grid gap-2">
-                  <Label>نوع</Label>
-                  <p className="rounded-lg border p-2 text-sm font-bold">
-                    {importLog.parsedType === "income" ? "واریز ↑" : "برداشت ↓"}
-                  </p>
+                  <Label>نوع تراکنش</Label>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setImportType("income")}
+                      className={`rounded-xl border-2 p-2 text-sm font-medium transition ${
+                        importType === "income"
+                          ? "border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+                          : "border-border text-muted-foreground"
+                      }`}
+                    >
+                      واریز ↑
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setImportType("expense")}
+                      className={`rounded-xl border-2 p-2 text-sm font-medium transition ${
+                        importType === "expense"
+                          ? "border-red-500 bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300"
+                          : "border-border text-muted-foreground"
+                      }`}
+                    >
+                      برداشت ↓
+                    </button>
+                  </div>
                 </div>
                 <div className="grid gap-2">
-                  <Label>مبلغ (قابل اصلاح)</Label>
+                  <Label>مبلغ {currencyLabel()} (قابل اصلاح)</Label>
                   <SmsAmountInput
-                    initial={importLog.parsedAmount}
+                    initial={importLog.parsedAmount ?? null}
                     value={importAmount}
                     onChange={setImportAmount}
                   />
@@ -645,8 +657,8 @@ function SmsSection({ accounts }: { accounts: BankAccount[] }) {
                   id: importLog.id,
                   body: {
                     action: "import",
-                    type: importLog.parsedType || "expense",
-                    amount: parseMoneyInput(importAmount),
+                    type: importType,
+                    amount: toStoredAmount(parseMoneyInput(importAmount)),
                     purpose: importPurpose || null,
                     bankAccountId: importAccount || null,
                   },
@@ -723,7 +735,7 @@ export function Banks({ onOpenTxDialog }: { onOpenTxDialog?: () => void }) {
       ) : !accounts || accounts.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-2 py-10 text-center">
-            <Landmark className="h-10 w-10 text-[rgba(90,103,95,0.4)]" />
+            <Landmark className="h-10 w-10 text-muted-foreground/40" />
             <p className="font-medium">حساب بانکی ثبت نشده</p>
             <p className="text-sm text-muted-foreground">می‌توانید چند حساب بانکی اضافه کنید و پیامک‌های هر کدام را مدیریت کنید</p>
             <Button onClick={() => setAddOpen(true)} className="mt-2 bg-emerald-700 hover:bg-emerald-800">
@@ -771,21 +783,21 @@ export function Banks({ onOpenTxDialog }: { onOpenTxDialog?: () => void }) {
                   </div>
                   {maskedCard && <div dir="ltr" className="mt-2 text-sm tracking-widest text-muted-foreground">{maskedCard}</div>}
                   <div className="mt-3 text-2xl font-bold tabular-nums-persian">
-                    {formatMoney(balance)}
-                    <span className="mr-1 text-xs font-normal text-muted-foreground">تومان</span>
+                    {formatMoneyU(balance)}
+                    <span className="mr-1 text-xs font-normal text-muted-foreground">{currencyLabel()}</span>
                   </div>
                   <div className="mt-3 space-y-1 text-xs text-muted-foreground">
                     <div className="flex justify-between">
                       <span>موجودی اولیه</span>
-                      <span className="tabular-nums-persian">{formatMoney(acc.initialBalance)}</span>
+                      <span className="tabular-nums-persian">{formatMoneyU(acc.initialBalance)}</span>
                     </div>
-                    <div className="flex justify-between text-emerald-700">
+                    <div className="flex justify-between text-emerald-700 dark:text-emerald-400">
                       <span>جمع واریز</span>
-                      <span className="tabular-nums-persian">+{formatMoney(inc)}</span>
+                      <span className="tabular-nums-persian">+{formatMoneyU(inc)}</span>
                     </div>
-                    <div className="flex justify-between text-red-600">
+                    <div className="flex justify-between text-red-600 dark:text-red-400">
                       <span>جمع برداشت</span>
-                      <span className="tabular-nums-persian">−{formatMoney(exp)}</span>
+                      <span className="tabular-nums-persian">−{formatMoneyU(exp)}</span>
                     </div>
                     <Progress value={Math.min(100, (exp / Math.max(1, inc)) * 100)} className="mt-1 h-1" />
                   </div>

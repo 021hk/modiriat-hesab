@@ -71,6 +71,8 @@ export interface SmsLog {
   parsedType?: "income" | "expense" | "unknown" | null;
   parsedAmount?: number | null;
   status: "pending" | "imported" | "ignored";
+  transactionId?: string | null;
+  nativeId?: string | null;
   createdAt: string;
 }
 

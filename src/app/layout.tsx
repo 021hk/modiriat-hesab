@@ -2,6 +2,7 @@ import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { SwRegister } from "@/components/sw-register";
+import { ThemeProvider } from "@/components/theme-provider";
 
 // نسخه ۲.۰: برنامه کاملاً آفلاین است — داده‌ها در IndexedDB خود دستگاه ذخیره می‌شوند
 
@@ -37,7 +38,7 @@ export default function RootLayout({
   return (
     <html lang="fa" dir="rtl" suppressHydrationWarning>
       <head>
-        <meta name="color-scheme" content="light" />
+        <meta name="color-scheme" content="light dark" />
         {/* ثبت سرویس‌ورکر مستقیم در HTML — مستقل از hydration؛ حتی اگر جاوااسکریپت
             صفحه شکست بخورد، SW جدید نصب و کش‌های قدیمی پاک‌سازی می‌شوند */}
         <script
@@ -49,7 +50,11 @@ export default function RootLayout({
           dangerouslySetInnerHTML={{
             __html: `
               html { background-color: #f4f8f6; color-scheme: light; }
+              html.dark { background-color: #0b1410; color-scheme: dark; }
+              html.dark #boot-splash { background-color: #0b1410 !important; }
+              html.dark #boot-splash .boot-text { color: #37b78a !important; }
               body { background-color: #f4f8f6; color: #0e1913; margin: 0; }
+              html.dark body { background-color: #0b1410; color: #ecefed; }
               @font-face {
                 font-family: 'Vazirmatn';
                 src: url('/fonts/Vazirmatn-Light.woff2') format('woff2');
@@ -79,7 +84,8 @@ export default function RootLayout({
         />
       </head>
       <body className="antialiased bg-background text-foreground">
-        {/* اسپلش بوت: تا زمان بارگذاری کامل جاوااسکریپت نمایش داده می‌شود */}
+        <ThemeProvider>
+          {/* اسپلش بوت: تا زمان بارگذاری کامل جاوااسکریپت نمایش داده می‌شود */}
         <div
           id="boot-splash"
           style={{
@@ -112,7 +118,7 @@ export default function RootLayout({
               <path d="M3 5v14a2 2 0 0 0 2 2h15a1 1 0 0 0 1-1v-4" />
             </svg>
           </div>
-          <div style={{ fontSize: 18, fontWeight: 700, color: "#065f46" }}>حساب‌یار</div>
+          <div className="boot-text" style={{ fontSize: 18, fontWeight: 700, color: "#065f46" }}>حساب‌یار</div>
           <div
             className="boot-spinner"
             style={{
@@ -173,6 +179,7 @@ export default function RootLayout({
         {children}
         <Toaster />
         <SwRegister />
+        </ThemeProvider>
       </body>
     </html>
   );

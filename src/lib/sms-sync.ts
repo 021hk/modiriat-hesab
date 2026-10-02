@@ -55,8 +55,25 @@ function isJunk(text: string): boolean {
   return JUNK_PATTERNS.some((p) => lower.includes(p));
 }
 
-// تطبیق نام بانک پارس‌شده با حساب‌های ثبت‌شده کاربر
-function matchAccount(accounts: BankAccount[], bankName: string | null): string | null {
+// تطبیق نام بانک/کارت پارس‌شده با حساب‌های ثبت‌شده کاربر
+function matchAccount(
+  accounts: BankAccount[],
+  bankName: string | null,
+  cardTail: string | null
+): string | null {
+  // اولویت ۱: تطبیق ۴ رقم آخر کارت/حساب
+  if (cardTail) {
+    const tail = cardTail.replace(/\D/g, "");
+    if (tail.length >= 3) {
+      const hit = accounts.find((a) => {
+        const card = (a.cardNumber || "").replace(/\D/g, "");
+        const accNum = (a.accountNumber || "").replace(/\D/g, "");
+        return (card.length >= 4 && card.endsWith(tail)) || (accNum.length >= 4 && accNum.endsWith(tail));
+      });
+      if (hit) return hit.id;
+    }
+  }
+  // اولویت ۲: تطبیق نام بانک
   if (!bankName) return null;
   const bn = bankName.replace(/\./g, "").trim();
   if (!bn) return null;
@@ -70,7 +87,6 @@ function matchAccount(accounts: BankAccount[], bankName: string | null): string 
 
 export interface SyncOptions {
   autoImport?: boolean; // ثبت خودکار تراکنش‌های مطمئن (پیش‌فرض: روشن)
-  convertRial?: boolean; // تبدیل ریال به تومان (پیش‌فرض: روشن)
   silent?: boolean;
 }
 
@@ -87,7 +103,6 @@ export function syncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
 
 async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
   const autoImport = options?.autoImport !== false;
-  const convertRial = options?.convertRial !== false;
   const empty = { total: 0, bankCount: 0, imported: 0, queued: 0, skipped: 0 };
 
   if (!isNativeAndroid()) return { ok: false, reason: "not_native", ...empty };
@@ -146,16 +161,14 @@ async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
     }
 
     const parsed = parseBankSms(text);
-    if (!parsed.amount || parsed.amount <= 0 || parsed.type === "unknown") {
-      bankCount++; // متن بانکی ولی بدون مبلغ/نوع مشخص → صف نمی‌شود
+    if (!parsed.amount || parsed.amount <= 0) {
+      bankCount++; // متن بانکی ولی بدون مبلغ مشخص → صف نمی‌شود
       continue;
     }
     bankCount++;
 
-    // واحد پول: پیامک بانک‌ها ریال است → در صورت فعال بودن، تقسیم بر ۱۰ (تومان)
-    const unit = parsed.unit || "rial";
-    let finalAmount = parsed.amount;
-    if (convertRial && unit === "rial") finalAmount = Math.round(parsed.amount / 10);
+    // واحد پول: مبالغ همیشه به «ریال» ذخیره می‌شوند (نمایش بر اساس تنظیم کاربر تبدیل می‌شود)
+    const finalAmount = parsed.amount;
 
     const dateIso = new Date(msg.date).toISOString();
     const baseLog = {
@@ -163,21 +176,26 @@ async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
       rawText: text,
       sender: msg.sender || null,
       bankName: parsed.bankName,
-      parsedType: parsed.type as "income" | "expense",
+      parsedType: parsed.type,
       parsedAmount: finalAmount,
       nativeId,
       createdAt: dateIso,
     };
 
-    if (autoImport && parsed.confidence >= AUTO_CONFIDENCE && finalAmount > 0) {
+    if (
+      autoImport &&
+      parsed.confidence >= AUTO_CONFIDENCE &&
+      (parsed.type === "income" || parsed.type === "expense") &&
+      finalAmount > 0
+    ) {
       // ثبت خودکار تراکنش
       const tx = {
         id: newId(),
         type: parsed.type as "income" | "expense",
         amount: finalAmount,
-        purpose: null,
+        purpose: parsed.bankName ? `پیامک بانک ${parsed.bankName}` : "ثبت خودکار پیامک",
         categoryId: null,
-        bankAccountId: matchAccount(accounts, parsed.bankName),
+        bankAccountId: matchAccount(accounts, parsed.bankName, parsed.cardTail),
         date: dateIso,
         source: "sms" as const,
         rawSms: text,
@@ -190,7 +208,7 @@ async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
       seenNative.add(nativeId);
       imported++;
     } else {
-      // در صف بررسی (نامطمئن یا ثبت خودکار خاموش)
+      // در صف بررسی (نامطمئن، بدون نوع مشخص، یا ثبت خودکار خاموش)
       const log = { ...baseLog, status: "pending" as const };
       await dbPut(STORES.smsLogs, log);
       seenNative.add(nativeId);

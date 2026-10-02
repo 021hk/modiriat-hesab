@@ -93,7 +93,7 @@ export function Backup() {
           >
             <Download className="ml-2 h-4 w-4" /> دانلود فایل پشتیبان
           </Button>
-          <div className="rounded-xl bg-[rgba(236,242,238,0.6)] p-3 text-xs leading-5 text-muted-foreground">
+          <div className="rounded-xl bg-muted/60 p-3 text-xs leading-5 text-muted-foreground">
             <ShieldCheck className="mb-1 h-4 w-4 text-emerald-600" />
             توصیه: هر هفته یک نسخه پشتیبان تهیه و در جای امن (مثلاً تلگرام سیو شده یا گوگل‌درایو) نگه دارید.
           </div>
@@ -118,9 +118,9 @@ export function Backup() {
           </Button>
 
           {backupInfo && (
-            <div className="rounded-xl border-2 border-emerald-200 bg-emerald-50 p-4">
-              <div className="mb-2 text-sm font-bold text-emerald-900">فایل معتبر است — خلاصه محتوا:</div>
-              <div className="grid grid-cols-2 gap-1.5 text-xs text-emerald-800 sm:grid-cols-3">
+            <div className="rounded-xl border-2 border-emerald-200 bg-emerald-50 p-4 dark:border-emerald-800 dark:bg-emerald-950/30">
+              <div className="mb-2 text-sm font-bold text-emerald-900 dark:text-emerald-300">فایل معتبر است — خلاصه محتوا:</div>
+              <div className="grid grid-cols-2 gap-1.5 text-xs text-emerald-800 sm:grid-cols-3 dark:text-emerald-400">
                 <Badge variant="secondary">{backupInfo.transactions} تراکنش</Badge>
                 <Badge variant="secondary">{backupInfo.categories} دسته</Badge>
                 <Badge variant="secondary">{backupInfo.bankAccounts} حساب</Badge>
@@ -152,8 +152,8 @@ export function Backup() {
           </div>
           <Separator className="mb-3" />
           <ul className="list-inside list-disc space-y-1.5 text-xs leading-5 text-muted-foreground">
-            <li>چون نرم‌افزار تحت وب است، با ورود از هر دستگاهی (گوشی، ویندوز، مک، لینوکس) داده‌های یکسانی را می‌بینید.</li>
-            <li>فایل پشتیبان برای زمانی است که بخواهید داده‌ها را روی سرور دیگری منتقل کنید یا نسخه‌ای آفلاین نگه دارید.</li>
+            <li>داده‌ها فقط روی خود دستگاه ذخیره می‌شوند؛ فایل پشتیبان تنها راه انتقال به دستگاه دیگر است.</li>
+            <li>فایل پشتیبان را هر هفته در جای امن (مثلاً گوگل‌درایو یا تلگرام سیو شده) نگه دارید.</li>
             <li>عکس رسیدها هم داخل فایل پشتیبان ذخیره می‌شوند و جای دیگری لازم نیست.</li>
           </ul>
         </CardContent>

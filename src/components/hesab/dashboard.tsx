@@ -6,7 +6,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { Badge } from "@/components/ui/badge";
 import { TrendingUp, TrendingDown, Wallet, HandCoins, ScrollText, Landmark, ArrowLeft } from "lucide-react";
 import { api, type Stats } from "@/lib/client-api";
-import { formatMoney, formatDateShortFa } from "@/lib/format";
+import { formatMoney, formatMoneyU, currencyLabel, formatDateShortFa } from "@/lib/format";
 
 function Diff({ value, prev }: { value: number; prev: number }) {
   if (prev === 0) return null;
@@ -54,7 +54,7 @@ export function Dashboard({ onGoToTab }: { onGoToTab?: (tab: string) => void }) 
           </div>
           <div className="mt-2 text-3xl font-bold tracking-tight lg:text-4xl">
             {formatMoney(data.totalBalance)}
-            <span className="mr-2 text-base font-normal text-emerald-200">تومان</span>
+            <span className="mr-2 text-base font-normal text-emerald-200">{currencyLabel()}</span>
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
             {data.accountSummaries.length === 0 ? (
@@ -69,7 +69,7 @@ export function Dashboard({ onGoToTab }: { onGoToTab?: (tab: string) => void }) 
                 <div key={acc.id} className="flex items-center gap-1.5 rounded-full bg-[rgba(255,255,255,0.15)] px-3 py-1.5 text-xs backdrop-blur">
                   <span className="h-2 w-2 rounded-full" style={{ backgroundColor: acc.color }} />
                   <span>{acc.name}</span>
-                  <span className="font-bold tabular-nums-persian">{formatMoney(acc.balance)}</span>
+                  <span className="font-bold tabular-nums-persian">{formatMoneyU(acc.balance)}</span>
                 </div>
               ))
             )}
@@ -79,27 +79,27 @@ export function Dashboard({ onGoToTab }: { onGoToTab?: (tab: string) => void }) 
 
       {/* کارت‌های آماری */}
       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Card className="border-emerald-100">
+        <Card className="border-emerald-100 dark:border-emerald-900">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <span className="text-xs text-muted-foreground">درآمد این ماه</span>
-              <div className="rounded-full bg-emerald-100 p-1.5 text-emerald-700">
+              <div className="rounded-full bg-emerald-100 p-1.5 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300">
                 <TrendingUp className="h-4 w-4" />
               </div>
             </div>
-            <div className="mt-2 text-lg font-bold text-emerald-700 tabular-nums-persian">{formatMoney(data.monthIncome)}</div>
+            <div className="mt-2 text-lg font-bold text-emerald-700 dark:text-emerald-300 tabular-nums-persian">{formatMoneyU(data.monthIncome)}</div>
             <Diff value={data.monthIncome} prev={data.prevIncome} />
           </CardContent>
         </Card>
-        <Card className="border-red-100">
+        <Card className="border-red-100 dark:border-red-900">
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <span className="text-xs text-muted-foreground">هزینه این ماه</span>
-              <div className="rounded-full bg-red-100 p-1.5 text-red-600">
+              <div className="rounded-full bg-red-100 p-1.5 text-red-600 dark:bg-red-900/40 dark:text-red-300">
                 <TrendingDown className="h-4 w-4" />
               </div>
             </div>
-            <div className="mt-2 text-lg font-bold text-red-600 tabular-nums-persian">{formatMoney(data.monthExpense)}</div>
+            <div className="mt-2 text-lg font-bold text-red-600 dark:text-red-400 tabular-nums-persian">{formatMoneyU(data.monthExpense)}</div>
             <Diff value={data.monthExpense} prev={data.prevExpense} />
           </CardContent>
         </Card>
@@ -107,11 +107,11 @@ export function Dashboard({ onGoToTab }: { onGoToTab?: (tab: string) => void }) 
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <span className="text-xs text-muted-foreground">از بدهکاران طلب دارم</span>
-              <div className="rounded-full bg-amber-100 p-1.5 text-amber-700">
+              <div className="rounded-full bg-amber-100 p-1.5 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
                 <HandCoins className="h-4 w-4" />
               </div>
             </div>
-            <div className="mt-2 text-lg font-bold text-amber-700 tabular-nums-persian">{formatMoney(data.totalDueToMe)}</div>
+            <div className="mt-2 text-lg font-bold text-amber-700 dark:text-amber-300 tabular-nums-persian">{formatMoneyU(data.totalDueToMe)}</div>
             <span className="text-xs text-muted-foreground">{data.debtorCount} بدهکار فعال</span>
           </CardContent>
         </Card>
@@ -119,11 +119,11 @@ export function Dashboard({ onGoToTab }: { onGoToTab?: (tab: string) => void }) 
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <span className="text-xs text-muted-foreground">به طلبکاران بدهکارم</span>
-              <div className="rounded-full bg-orange-100 p-1.5 text-orange-700">
+              <div className="rounded-full bg-orange-100 p-1.5 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
                 <ScrollText className="h-4 w-4" />
               </div>
             </div>
-            <div className="mt-2 text-lg font-bold text-orange-700 tabular-nums-persian">{formatMoney(data.totalIOwe)}</div>
+            <div className="mt-2 text-lg font-bold text-orange-700 dark:text-orange-300 tabular-nums-persian">{formatMoneyU(data.totalIOwe)}</div>
             <span className="text-xs text-muted-foreground">{data.creditorCount} طلبکار فعال</span>
           </CardContent>
         </Card>
@@ -146,7 +146,7 @@ export function Dashboard({ onGoToTab }: { onGoToTab?: (tab: string) => void }) 
                       <span className="h-2.5 w-2.5 rounded-full" style={{ backgroundColor: c.color }} />
                       {c.name}
                     </span>
-                    <span className="font-medium tabular-nums-persian">{formatMoney(c.total)}</span>
+                    <span className="font-medium tabular-nums-persian">{formatMoneyU(c.total)}</span>
                   </div>
                   <div className="h-2 overflow-hidden rounded-full bg-muted">
                     <div
@@ -180,7 +180,9 @@ export function Dashboard({ onGoToTab }: { onGoToTab?: (tab: string) => void }) 
                   <div className="flex items-center gap-2.5">
                     <div
                       className={`flex h-8 w-8 items-center justify-center rounded-full text-xs ${
-                        tx.type === "income" ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-600"
+                        tx.type === "income"
+                          ? "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300"
+                          : "bg-red-100 text-red-600 dark:bg-red-900/40 dark:text-red-300"
                       }`}
                     >
                       {tx.type === "income" ? "+" : "-"}
@@ -199,10 +201,10 @@ export function Dashboard({ onGoToTab }: { onGoToTab?: (tab: string) => void }) 
                   </div>
                   <span
                     className={`text-sm font-bold tabular-nums-persian ${
-                      tx.type === "income" ? "text-emerald-700" : "text-red-600"
+                      tx.type === "income" ? "text-emerald-700 dark:text-emerald-300" : "text-red-600 dark:text-red-400"
                     }`}
                   >
-                    {tx.type === "income" ? "+" : "−"} {formatMoney(tx.amount)}
+                    {tx.type === "income" ? "+" : "−"} {formatMoneyU(tx.amount)}
                   </span>
                 </div>
               ))
@@ -227,7 +229,7 @@ export function Dashboard({ onGoToTab }: { onGoToTab?: (tab: string) => void }) 
                   <span className="text-sm font-medium">{acc.name}</span>
                 </div>
                 <div className="mt-1 text-xs text-muted-foreground">بانک {acc.bankName}</div>
-                <div className="mt-2 text-lg font-bold tabular-nums-persian">{formatMoney(acc.balance)} <span className="text-xs font-normal text-muted-foreground">تومان</span></div>
+                <div className="mt-2 text-lg font-bold tabular-nums-persian">{formatMoneyU(acc.balance)} <span className="text-xs font-normal text-muted-foreground">{currencyLabel()}</span></div>
               </div>
             ))}
           </CardContent>

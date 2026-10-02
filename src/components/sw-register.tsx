@@ -23,7 +23,7 @@ export function SwRegister() {
         .then((keys) =>
           Promise.all(
             keys
-              .filter((k) => !k.startsWith("hesab-yar-v4"))
+              .filter((k) => !k.startsWith("hesab-yar-v5"))
               .map((k) => caches.delete(k))
           )
         )

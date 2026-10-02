@@ -1,98 +1,116 @@
-// تست پارسر پیامک بانکی با نمونه‌های واقعی
-import { parseBankSms } from "../src/lib/sms-parser";
-import { isPersonalSender } from "../src/lib/sms-sync";
+// تست پارسر پیامک بانکی — اجرا: bun scripts/test-sms-parser.ts
+import { parseBankSms, normalizeDigits } from "../src/lib/sms-parser";
 
 let pass = 0;
-let fail = 0;
+let failCount = 0;
 
-function expect(name: string, cond: boolean, detail?: string) {
-  if (cond) {
+function check(name: string, actual: unknown, expected: unknown) {
+  const ok = JSON.stringify(actual) === JSON.stringify(expected);
+  if (ok) {
     pass++;
-    console.log(`  ✓ ${name}`);
   } else {
-    fail++;
-    console.log(`  ✗ ${name}${detail ? " — " + detail : ""}`);
+    failCount++;
+    console.log(`✗ ${name}\n   expected: ${JSON.stringify(expected)}\n   actual:   ${JSON.stringify(actual)}`);
   }
 }
 
-const samples: { text: string; sender: string }[] = [
-  { sender: "MellatBank", text: "بانک ملت: برداشت مبلغ 500,000 ریال از حساب 1234**678 بابت خرید" },
-  { sender: "BSI", text: "واریز به حساب شما مبلغ 2,500,000 ريال بانک صادرات. مانده: 10,000,000 ریال" },
-  { sender: "MellatBank", text: "بانک ملت رمز یکبار مصرف 123456 برای مبلغ 500,000 ریال پویا" },
-  { sender: "+989121234567", text: "سلام چطوری؟ امروز بیا خونه" },
-  { sender: "9870", text: "مانده حساب شما 1,000,000 ریال می‌باشد" },
-  { sender: "PARSIAN", text: "خرید مبلغ ۱۵۰٬۰۰۰ ریال از پایانه فروشگاهی، بانک پارسیان" },
-  { sender: "TBANK", text: "بانک تجارت: انتقال وجه به مبلغ 1,000,000 ریال از حساب شما" },
-  { sender: "ENBANK", text: "به نام شما مبلغ 750,000 ریال واریز شد. بانک اقتصاد نوین" },
-  { sender: "1000606", text: "بیمه: لینک پرداخت قبض شما آماده است برنده جایزه" },
-  { sender: "SB24", text: "سامان: پرداخت مبلغ 320,000 تومان انجام شد" },
-];
+// ─── ۱) نمونه واقعی کاربر (فرمت ساختاری عددی) ───
+const userSms = "777.888.13972872.1\n-473,000\n07/10_02:10\nمانده: 66,663,400";
+const r1 = parseBankSms(userSms);
+check("نمونه کاربر: نوع = برداشت", r1.type, "expense");
+check("نمونه کاربر: مبلغ = 473000", r1.amount, 473000);
+check("نمونه کاربر: موجودی = 66663400", r1.balance, 66663400);
+check("نمونه کاربر: واحد = ریال (پیش‌فرض)", r1.unit, null);
+check("نمونه کاربر: شناسه حساب", r1.accountRef, "777.888.13972872.1");
+check("نمونه کاربر: ۴ رقم آخر = 2872", r1.cardTail, "2872");
+check("نمونه کاربر: اطمینان ≥ 0.85 (ثبت خودکار)", r1.confidence >= 0.85, true);
 
-console.log("--- پارسر ---");
-// 1: برداشت ملت
-let r = parseBankSms(samples[0].text);
-expect("type=expense", r.type === "expense");
-expect("amount=500000", r.amount === 500000, String(r.amount));
-expect("bank=ملت", r.bankName === "ملت", String(r.bankName));
-expect("unit=rial", r.unit === "rial");
-expect("confidence>=0.85", r.confidence >= 0.85, String(r.confidence));
+// ─── ۲) نمونه کاربر با ارقام فارسی ───
+const r2 = parseBankSms("۷۷۷.۸۸۸.۱۳۹۷۲۸۷۲.۱\n−۴۷۳,۰۰۰\n۰۷/۱۰_۰۲:۱۰\nمانده: ۶۶,۶۶۳,۴۰۰");
+check("نمونه کاربر فارسی: نوع = برداشت", r2.type, "expense");
+check("نمونه کاربر فارسی: مبلغ = 473000", r2.amount, 473000);
 
-// 2: واریز صادرات
-r = parseBankSms(samples[1].text);
-expect("income", r.type === "income");
-expect("amount=2500000", r.amount === 2500000, String(r.amount));
-expect("bank=صادرات", r.bankName === "صادرات", String(r.bankName));
+// ─── ۳) کلیدواژه‌دار کلاسیک ───
+const r3 = parseBankSms("بانک ملت: برداشت مبلغ 500,000 ریال از حساب 1234 بابت خرید");
+check("ملت برداشت: نوع", r3.type, "expense");
+check("ملت برداشت: مبلغ", r3.amount, 500000);
+check("ملت برداشت: بانک", r3.bankName, "ملت");
+check("ملت برداشت: واحد", r3.unit, "rial");
 
-// 3: OTP
-r = parseBankSms(samples[2].text);
-console.log(`  (OTP parse: type=${r.type} amount=${r.amount} — junk filter هم می‌گیرد)`);
+// ─── ۴) واریز ───
+const r4 = parseBankSms("بانک ملی: واریز به مبلغ 1,200,000 ریال شبا IR1205700282801 موجودی: 5,432,100");
+check("ملی واریز: نوع", r4.type, "income");
+check("ملی واریز: مبلغ", r4.amount, 1200000);
+check("ملی واریز: موجودی", r4.balance, 5432100);
 
-// 5: مانده بدون نوع
-r = parseBankSms(samples[4].text);
-expect("unknown (بدون نوع)", r.type === "unknown");
+// ─── ۵) واریز + بابت خرید (اولین کلیدواژه برنده است) ───
+const r5 = parseBankSms("واریز 300,000 ریال بابت خرید شما ثبت شد");
+check("واریز بابت خرید: نوع = درآمد", r5.type, "income");
 
-// 6: ارقام فارسی
-r = parseBankSms(samples[5].text);
-expect("fa-digits amount=150000", r.amount === 150000, String(r.amount));
-expect("expense", r.type === "expense");
+// ─── ۶) کارت به کارت با شماره کارت ───
+const r6 = parseBankSms("بانک صادرات: کارت به کارت 2,500,000 ریال از کارت 6037-9971-1234-5678 مانده: 12,340,000");
+check("صادرات کارت‌به‌کارت: نوع", r6.type, "expense");
+check("صادرات کارت‌به‌کارت: مبلغ", r6.amount, 2500000);
+check("صادرات کارت‌به‌کارت: ۴ رقم آخر", r6.cardTail, "5678");
 
-// 7: انتقال وجه
-r = parseBankSms(samples[6].text);
-expect("transfer=expense", r.type === "expense");
-expect("amount=1000000", r.amount === 1000000, String(r.amount));
+// ─── ۷) ساختاری بدون علامت → نامطمئن (صف بررسی) ───
+const r7 = parseBankSms("9876543.2\n473,000\n07/10_02:10\nمانده: 66,663,400");
+check("بدون علامت: مبلغ پیدا شود", r7.amount, 473000);
+check("بدون علامت: نوع نامشخص", r7.type, "unknown");
+check("بدون علامت: اطمینان < 0.85", r7.confidence < 0.85, true);
 
-// 8: واریز اقتصاد نوین
-r = parseBankSms(samples[7].text);
-expect("income ENBANK", r.type === "income", r.type);
-expect("amount=750000", r.amount === 750000, String(r.amount));
+// ─── ۸) فرمت تومان ───
+const r8 = parseBankSms("بانک سامان: برداشت مبلغ 250,000 تومان");
+check("سامان تومان: واحد", r8.unit, "toman");
+check("سامان تومان: مبلغ", r8.amount, 250000);
 
-// 10: تومان
-r = parseBankSms(samples[9].text);
-expect("unit=toman", r.unit === "toman", String(r.unit));
-expect("amount=320000", r.amount === 320000, String(r.amount));
+// ─── ۹) فرمت فارسی منفی آخر خط ───
+const r9 = parseBankSms("777.888.13972872.1\n473,000-\nمانده: 66,663,400");
+check("منفی آخر خط: نوع = برداشت", r9.type, "expense");
+check("منفی آخر خط: مبلغ", r9.amount, 473000);
 
-console.log("--- فیلتر فرستنده ---");
-expect("mobile personal", isPersonalSender("+989121234567") === true);
-expect("mobile 09 personal", isPersonalSender("09121234567") === true);
-expect("MellatBank NOT personal", isPersonalSender("MellatBank") === false);
-expect("9870 NOT personal", isPersonalSender("9870") === false);
-expect("PARSIAN NOT personal", isPersonalSender("PARSIAN") === false);
-expect("landline personal", isPersonalSender("+982188776655") === true);
+// ─── ۱۰) فقط موجودی بدون مبلغ تراکنش ───
+const r10 = parseBankSms("777.888.13972872.1\nمانده: 66,663,400");
+check("فقط موجودی: بدون مبلغ", r10.amount, null);
+check("فقط موجودی: موجودی درست", r10.balance, 66663400);
 
-console.log("--- منطق تبدیل (مثل sync) ---");
-// ملت برداشت 500000 ریال → 50000 تومان
-const conv = r_rial_to_toman(samples[0].text);
-expect("500000 rial → 50000 toman", conv === 50000, String(conv));
-// سامان 320000 تومان → همان 320000
-const conv2 = r_rial_to_toman(samples[9].text);
-expect("320000 toman → 320000", conv2 === 320000, String(conv2));
+// ─── ۱۱) خط موجودی جدا (عدد در خط بعد از مانده) ───
+const r11 = parseBankSms("مانده:\n66,663,400\n-100,000");
+check("مانده جدا: مبلغ = برداشت 100000", r11.amount, 100000);
+check("مانده جدا: موجودی درست", r11.balance, 66663400);
 
-function r_rial_to_toman(text: string): number {
-  const p = parseBankSms(text);
-  if (!p.amount) return 0;
-  const unit = p.unit || "rial";
-  return unit === "rial" ? Math.round(p.amount / 10) : p.amount;
-}
+// ─── ۱۲) موجودی قابل استفاده ───
+const r12 = parseBankSms("بانک سپه: مانده قابل استفاده: 3,500,000 ریال - برداشت 400,000 ریال");
+check("سپه: نوع", r12.type, "expense");
+check("سپه: مبلغ", r12.amount, 400000);
+check("سپه: موجودی", r12.balance, 3500000);
 
-console.log(`\nنتیجه: ${pass} موفق، ${fail} ناموفق`);
-if (fail > 0) process.exit(1);
+// ─── ۱۳) کارمزد ───
+const r13 = parseBankSms("بانک تجارت: کسر کارمزد 50,000 ریال");
+check("تجارت کارمزد: نوع", r13.type, "expense");
+check("تجارت کارمزد: مبلغ", r13.amount, 50000);
+
+// ─── ۱۴) فرمت با نقطه هزارگان ───
+const r14 = parseBankSms("777.888.13972872.1\n-473.000\nمانده: 66.663.400");
+check("نقطه هزارگان: مبلغ = 473000", r14.amount, 473000);
+
+// ─── ۱۵) شبا واریز ───
+const r15 = parseBankSms("انتقال وجه به شبا IR واریز 45,000,000 ریال به حساب شما");
+check("شبا واریز: نوع", r15.type, "income");
+check("شبا واریز: مبلغ", r15.amount, 45000000);
+
+// ─── ۱۶) نرمال‌سازی ارقام ───
+check("نرمال‌سازی: ۱۲۳٬۴۵۶", normalizeDigits("۱۲۳٬۴۵۶"), "123,456");
+
+// ─── ۱۷) پیامک غیربانکی ───
+const r17 = parseBankSms("سلام خوبی؟ فردا میای؟");
+check("غیربانکی: بدون مبلغ", r17.amount, null);
+check("غیربانکی: نوع نامشخص", r17.type, "unknown");
+
+// ─── ۱۸) دریافت + موجودی ───
+const r18 = parseBankSms("دريافت 800,000 ريال — موجودي 9,000,000 ريال");
+check("دریافت عربی: نوع", r18.type, "income");
+check("دریافت عربی: مبلغ", r18.amount, 800000);
+
+console.log(`\nنتیجه: ${pass} موفق، ${failCount} ناموفق`);
+if (failCount > 0) process.exit(1);

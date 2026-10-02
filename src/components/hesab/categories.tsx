@@ -66,7 +66,7 @@ function CategoryDialog({
               type="button"
               onClick={() => setType("expense")}
               className={`rounded-xl border-2 p-3 text-sm font-medium transition ${
-                type === "expense" ? "border-red-400 bg-red-50 text-red-700" : "border-border text-muted-foreground"
+                type === "expense" ? "border-red-400 bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300" : "border-border text-muted-foreground"
               }`}
             >
               هزینه
@@ -75,7 +75,7 @@ function CategoryDialog({
               type="button"
               onClick={() => setType("income")}
               className={`rounded-xl border-2 p-3 text-sm font-medium transition ${
-                type === "income" ? "border-emerald-400 bg-emerald-50 text-emerald-700" : "border-border text-muted-foreground"
+                type === "income" ? "border-emerald-400 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300" : "border-border text-muted-foreground"
               }`}
             >
               درآمد
