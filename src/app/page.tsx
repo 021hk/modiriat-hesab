@@ -116,7 +116,7 @@ function AppContent() {
       {/* فوتر */}
       <footer className="mt-auto hidden border-t bg-card py-4 lg:block">
         <div className="mx-auto max-w-6xl px-4 text-center text-xs text-muted-foreground">
-          حساب‌یار — نسخه ۱.۱.۰ | قابل نصب به‌عنوان اپلیکیشن روی اندروید، ویندوز، مک و لینوکس (PWA)
+          حساب‌یار — نسخه ۱.۲.۰ | قابل نصب به‌عنوان اپلیکیشن روی اندروید، ویندوز، مک و لینوکس (PWA)
         </div>
       </footer>
 

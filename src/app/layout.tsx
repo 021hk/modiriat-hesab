@@ -3,6 +3,9 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { SwRegister } from "@/components/sw-register";
 
+// HTML هرگز کش نشود (قبلاً s-maxage=31536000 داشت که ریشه HTML کهنه و صفحه سیاه بود)
+export const dynamic = "force-dynamic";
+
 export const metadata: Metadata = {
   title: "مدیریت حساب | حساب‌یار",
   description:
@@ -36,6 +39,13 @@ export default function RootLayout({
     <html lang="fa" dir="rtl" suppressHydrationWarning>
       <head>
         <meta name="color-scheme" content="light" />
+        {/* ثبت سرویس‌ورکر مستقیم در HTML — مستقل از hydration؛ حتی اگر جاوااسکریپت
+            صفحه شکست بخورد، SW جدید نصب و کش‌های قدیمی پاک‌سازی می‌شوند */}
+        <script
+          dangerouslySetInnerHTML={{
+            __html: `try{if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(function(){})}}catch(e){}`,
+          }}
+        />
         <style
           dangerouslySetInnerHTML={{
             __html: `
@@ -141,20 +151,18 @@ export default function RootLayout({
             </a>
           </div>
           <style>{`@keyframes bootspin{to{transform:rotate(360deg)}}`}</style>
-          {/* اطمینان: اگر برنامه تا ۱۲ ثانیه بالا نیامد، یک‌بار صفحه رفرش می‌شود؛
-              اگر باز هم نشد، پیام خطا و دکمه «تلاش دوباره» نمایش داده می‌شود */}
+          {/* اطمینان: اگر برنامه تا ۱۲ ثانیه بالا نیامد، یک‌بار با پارامتر retry=1 رفرش
+              می‌شود (از sessionStorage استفاده نمی‌کنیم چون Clear-Site-Data آن را پاک می‌کند
+              و باعث حلقه رفرش بی‌نهایت می‌شد)؛ اگر باز هم نشد، پیام خطا نمایش داده می‌شود */}
           <script
             dangerouslySetInnerHTML={{
               __html: `setTimeout(function(){
                 var s=document.getElementById('boot-splash');
                 if(!s)return;
-                try{
-                  if(!sessionStorage.getItem('boot-retried')){
-                    sessionStorage.setItem('boot-retried','1');
-                    location.reload();
-                    return;
-                  }
-                }catch(e){}
+                if(location.search.indexOf('retry=1')<0){
+                  location.replace(location.pathname+location.search+(location.search?'&':'?')+'retry=1');
+                  return;
+                }
                 var sp=document.querySelector('#boot-splash .boot-spinner');
                 if(sp)sp.style.display='none';
                 var er=document.getElementById('boot-error');
