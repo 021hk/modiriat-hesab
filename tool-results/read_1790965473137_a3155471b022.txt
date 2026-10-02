@@ -1,0 +1,805 @@
+     1→"use client";
+     2→
+     3→import { useCallback, useEffect, useRef, useState } from "react";
+     4→import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
+     5→import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+     6→import { Button } from "@/components/ui/button";
+     7→import { Input } from "@/components/ui/input";
+     8→import { Label } from "@/components/ui/label";
+     9→import { Badge } from "@/components/ui/badge";
+    10→import { Skeleton } from "@/components/ui/skeleton";
+    11→import { Progress } from "@/components/ui/progress";
+    12→import {
+    13→  Dialog,
+    14→  DialogContent,
+    15→  DialogHeader,
+    16→  DialogTitle,
+    17→  DialogFooter,
+    18→} from "@/components/ui/dialog";
+    19→import {
+    20→  DropdownMenu,
+    21→  DropdownMenuContent,
+    22→  DropdownMenuItem,
+    23→  DropdownMenuTrigger,
+    24→} from "@/components/ui/dropdown-menu";
+    25→import {
+    26→  Select,
+    27→  SelectContent,
+    28→  SelectItem,
+    29→  SelectTrigger,
+    30→  SelectValue,
+    31→} from "@/components/ui/select";
+    32→import { useToast } from "@/hooks/use-toast";
+    33→import { Switch } from "@/components/ui/switch";
+    34→import {
+    35→  Plus,
+    36→  MoreVertical,
+    37→  Pencil,
+    38→  Trash2,
+    39→  Landmark,
+    40→  Wallet,
+    41→  MessageSquareText,
+    42→  Inbox,
+    43→  Download,
+    44→  CheckCheck,
+    45→  XCircle,
+    46→  Sparkles,
+    47→  BellRing,
+    48→  ShieldCheck,
+    49→  ShieldAlert,
+    50→  RefreshCw,
+    51→} from "lucide-react";
+    52→import { api, type BankAccount, type SmsLog, type Transaction } from "@/lib/client-api";
+    53→import { formatMoney, parseMoneyInput, formatMoneyPlain } from "@/lib/format";
+    54→import {
+    55→  HesabSms,
+    56→  isNativeAndroid,
+    57→  getSmsPermission,
+    58→  requestSmsPermission,
+    59→  type SmsPermState,
+    60→} from "@/lib/native-sms";
+    61→import { syncBankSms, getLastSmsSync } from "@/lib/sms-sync";
+    62→import { getMeta, setMeta } from "@/lib/local-db";
+    63→import type { PluginListenerHandle } from "@capacitor/core";
+    64→
+    65→const BANKS = [
+    66→  "ملت", "صادرات", "ملی", "تجارت", "پارسیان", "پاسارگاد", "سامان", "کشاورزی",
+    67→  "مسکن", "سپه", "صنعت و معدن", "اقتصاد نوین", "کارآفرین", "سینا", "دی", "پست بانک",
+    68→  "شهر", "آینده", "انصار", "قوامین", "رسالت", "رفاه", "توسعه صادرات", "سایر",
+    69→];
+    70→
+    71→const COLORS = ["#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#06b6d4", "#ec4899", "#84cc16", "#f97316"];
+    72→
+    73→function AccountDialog({
+    74→  open,
+    75→  onOpenChange,
+    76→  editing,
+    77→}: {
+    78→  open: boolean;
+    79→  onOpenChange: (v: boolean) => void;
+    80→  editing?: BankAccount | null;
+    81→}) {
+    82→  const { toast } = useToast();
+    83→  const qc = useQueryClient();
+    84→  const [name, setName] = useState(editing?.name || "");
+    85→  const [bankName, setBankName] = useState(editing?.bankName || "");
+    86→  const [cardNumber, setCardNumber] = useState(editing?.cardNumber || "");
+    87→  const [accountNumber, setAccountNumber] = useState(editing?.accountNumber || "");
+    88→  const [iban, setIban] = useState(editing?.iban || "");
+    89→  const [initialBalance, setInitialBalance] = useState(
+    90→    editing ? formatMoneyPlain(editing.initialBalance) : ""
+    91→  );
+    92→  const [color, setColor] = useState(editing?.color || COLORS[0]);
+    93→
+    94→  const mutation = useMutation({
+    95→    mutationFn: async () => {
+    96→      const body = {
+    97→        name,
+    98→        bankName,
+    99→        cardNumber: cardNumber || null,
+   100→        accountNumber: accountNumber || null,
+   101→        iban: iban || null,
+   102→        initialBalance: parseMoneyInput(initialBalance),
+   103→        color,
+   104→      };
+   105→      if (editing) return api.put(`/api/bank-accounts/${editing.id}`, body);
+   106→      return api.post("/api/bank-accounts", body);
+   107→    },
+   108→    onSuccess: () => {
+   109→      qc.invalidateQueries({ queryKey: ["bank-accounts"] });
+   110→      qc.invalidateQueries({ queryKey: ["stats"] });
+   111→      toast({ title: editing ? "حساب ویرایش شد" : "حساب بانکی اضافه شد" });
+   112→      onOpenChange(false);
+   113→    },
+   114→    onError: (e: Error) => toast({ title: "خطا", description: e.message, variant: "destructive" }),
+   115→  });
+   116→
+   117→  return (
+   118→    <Dialog open={open} onOpenChange={onOpenChange}>
+   119→      <DialogContent className="sm:max-w-md" dir="rtl">
+   120→        <DialogHeader>
+   121→          <DialogTitle>{editing ? "ویرایش حساب" : "افزودن حساب بانکی"}</DialogTitle>
+   122→        </DialogHeader>
+   123→        <div className="grid gap-4 py-2">
+   124→          <div className="grid grid-cols-2 gap-3">
+   125→            <div className="grid gap-2">
+   126→              <Label>نام بانک</Label>
+   127→              <Select value={bankName} onValueChange={setBankName}>
+   128→                <SelectTrigger>
+   129→                  <SelectValue placeholder="انتخاب بانک" />
+   130→                </SelectTrigger>
+   131→                <SelectContent className="max-h-64">
+   132→                  {BANKS.map((b) => (
+   133→                    <SelectItem key={b} value={b}>
+   134→                      {b}
+   135→                    </SelectItem>
+   136→                  ))}
+   137→                </SelectContent>
+   138→              </Select>
+   139→            </div>
+   140→            <div className="grid gap-2">
+   141→              <Label>نام نمایشی حساب</Label>
+   142→              <Input placeholder="مثلاً: ملت - جاری" value={name} onChange={(e) => setName(e.target.value)} />
+   143→            </div>
+   144→          </div>
+   145→          <div className="grid grid-cols-2 gap-3">
+   146→            <div className="grid gap-2">
+   147→              <Label>شماره کارت (اختیاری)</Label>
+   148→              <Input dir="ltr" className="text-left" placeholder="6104-..." value={cardNumber} onChange={(e) => setCardNumber(e.target.value)} />
+   149→            </div>
+   150→            <div className="grid gap-2">
+   151→              <Label>شماره حساب (اختیاری)</Label>
+   152→              <Input dir="ltr" className="text-left" value={accountNumber} onChange={(e) => setAccountNumber(e.target.value)} />
+   153→            </div>
+   154→          </div>
+   155→          <div className="grid gap-2">
+   156→            <Label>شماره شبا (اختیاری)</Label>
+   157→            <Input dir="ltr" className="text-left" placeholder="IR..." value={iban} onChange={(e) => setIban(e.target.value)} />
+   158→          </div>
+   159→          <div className="grid gap-2">
+   160→            <Label>موجودی اولیه (تومان)</Label>
+   161→            <Input
+   162→              inputMode="numeric"
+   163→              dir="ltr"
+   164→              className="text-left font-bold tabular-nums-persian"
+   165→              value={initialBalance ? formatMoneyPlain(parseMoneyInput(initialBalance)) : ""}
+   166→              onChange={(e) => setInitialBalance(e.target.value)}
+   167→            />
+   168→          </div>
+   169→          <div className="grid gap-2">
+   170→            <Label>رنگ</Label>
+   171→            <div className="flex gap-2">
+   172→              {COLORS.map((c) => (
+   173→                <button
+   174→                  key={c}
+   175→                  type="button"
+   176→                  onClick={() => setColor(c)}
+   177→                  className={`h-7 w-7 rounded-full transition ${color === c ? "ring-2 ring-offset-2 ring-foreground" : ""}`}
+   178→                  style={{ backgroundColor: c }}
+   179→                  aria-label={`رنگ ${c}`}
+   180→                />
+   181→              ))}
+   182→            </div>
+   183→          </div>
+   184→        </div>
+   185→        <DialogFooter>
+   186→          <Button variant="outline" onClick={() => onOpenChange(false)}>
+   187→            انصراف
+   188→          </Button>
+   189→          <Button
+   190→            onClick={() => mutation.mutate()}
+   191→            disabled={mutation.isPending || !name.trim() || !bankName}
+   192→            className="bg-emerald-700 hover:bg-emerald-800"
+   193→          >
+   194→            {mutation.isPending ? "..." : editing ? "ذخیره" : "افزودن حساب"}
+   195→          </Button>
+   196→        </DialogFooter>
+   197→      </DialogContent>
+   198→    </Dialog>
+   199→  );
+   200→}
+   201→
+   202→const toFa = (n: number) => {
+   203→  try {
+   204→    return n.toLocaleString("fa-IR");
+   205→  } catch {
+   206→    return String(n);
+   207→  }
+   208→};
+   209→
+   210→// ─── خواندن خودکار پیامک‌های بانکی (فقط اندروید) ───
+   211→function SmsAutoSync() {
+   212→  const { toast } = useToast();
+   213→  const qc = useQueryClient();
+   214→  const [mounted, setMounted] = useState(false);
+   215→  const [perm, setPerm] = useState<SmsPermState | null>(null);
+   216→  const [syncing, setSyncing] = useState(false);
+   217→  const [lastSync, setLastSync] = useState(0);
+   218→  const [autoImport, setAutoImport] = useState(true);
+   219→  const [convertRial, setConvertRial] = useState(true);
+   220→
+   221→  const syncingRef = useRef(false);
+   222→  const optsRef = useRef({ autoImport: true, convertRial: true });
+   223→  useEffect(() => {
+   224→    optsRef.current = { autoImport, convertRial };
+   225→  }, [autoImport, convertRial]);
+   226→
+   227→  const runSync = useCallback(
+   228→    async (silent: boolean) => {
+   229→      if (syncingRef.current) return;
+   230→      syncingRef.current = true;
+   231→      setSyncing(true);
+   232→      try {
+   233→        const res = await syncBankSms({ ...optsRef.current });
+   234→        setLastSync(await getLastSmsSync());
+   235→        qc.invalidateQueries({ queryKey: ["sms-logs"] });
+   236→        qc.invalidateQueries({ queryKey: ["transactions"] });
+   237→        qc.invalidateQueries({ queryKey: ["stats"] });
+   238→        if (res.ok) {
+   239→          const parts: string[] = [];
+   240→          if (res.imported > 0) parts.push(`${toFa(res.imported)} تراکنش خودکار ثبت شد`);
+   241→          if (res.queued > 0) parts.push(`${toFa(res.queued)} پیامک در صف بررسی است`);
+   242→          const desc = parts.length > 0 ? parts.join(" — ") : "پیامک بانکی جدیدی نبود";
+   243→          if (!silent || res.imported > 0 || res.queued > 0) {
+   244→            toast({ title: "پیامک‌ها بررسی شد", description: desc });
+   245→          }
+   246→        } else if (!silent && res.reason === "permission") {
+   247→          toast({ title: "دسترسی پیامک داده نشده است", variant: "destructive" });
+   248→        } else if (!silent && res.reason === "error") {
+   249→          toast({ title: "خطا در خواندن پیامک‌ها", variant: "destructive" });
+   250→        }
+   251→      } catch {
+   252→        if (!silent) toast({ title: "خطا در همگام‌سازی", variant: "destructive" });
+   253→      } finally {
+   254→        syncingRef.current = false;
+   255→        setSyncing(false);
+   256→      }
+   257→    },
+   258→    [qc, toast]
+   259→  );
+   260→
+   261→  // بارگذاری اولیه + sync خودکار در باز شدن تب
+   262→  useEffect(() => {
+   263→    if (!isNativeAndroid()) return;
+   264→    setMounted(true);
+   265→    void (async () => {
+   266→      const [p, ls, ai, cr] = await Promise.all([
+   267→        getSmsPermission(),
+   268→        getLastSmsSync(),
+   269→        getMeta<boolean>("smsAutoImport"),
+   270→        getMeta<boolean>("smsConvertRial"),
+   271→      ]);
+   272→      setPerm(p);
+   273→      setLastSync(ls || 0);
+   274→      if (ai === false) setAutoImport(false);
+   275→      if (cr === false) setConvertRial(false);
+   276→      if (p === "granted") void runSync(true);
+   277→    })();
+   278→  }, [runSync]);
+   279→
+   280→  // گوش دادن به پیامک زنده (وقتی برنامه باز است)
+   281→  useEffect(() => {
+   282→    if (!isNativeAndroid()) return;
+   283→    let handle: PluginListenerHandle | null = null;
+   284→    let timer: ReturnType<typeof setTimeout> | null = null;
+   285→    HesabSms.addListener("smsReceived", () => {
+   286→      if (timer) clearTimeout(timer);
+   287→      timer = setTimeout(() => void runSync(true), 3000);
+   288→    })
+   289→      .then((h) => {
+   290→        handle = h;
+   291→      })
+   292→      .catch(() => {});
+   293→    return () => {
+   294→      if (timer) clearTimeout(timer);
+   295→      void handle?.remove();
+   296→    };
+   297→  }, [runSync]);
+   298→
+   299→  const askPermission = async () => {
+   300→    const p = await requestSmsPermission();
+   301→    setPerm(p);
+   302→    if (p === "granted") {
+   303→      toast({ title: "دسترسی پیامک فعال شد" });
+   304→      void runSync(false);
+   305→    } else if (p === "denied") {
+   306→      toast({
+   307→        title: "دسترسی رد شد",
+   308→        description: "از تنظیمات گوشی ← برنامه‌ها ← حساب‌یار ← مجوزها، دسترسی پیامک را فعال کنید",
+   309→        variant: "destructive",
+   310→      });
+   311→    }
+   312→  };
+   313→
+   314→  if (!mounted || perm === null) return null;
+   315→
+   316→  return (
+   317→    <Card>
+   318→      <CardHeader className="pb-2">
+   319→        <CardTitle className="flex items-center gap-2 text-base">
+   320→          <BellRing className="h-4 w-4 text-emerald-700" />
+   321→          خواندن خودکار پیامک بانکی
+   322→        </CardTitle>
+   323→      </CardHeader>
+   324→      <CardContent className="space-y-3">
+   325→        {perm !== "granted" ? (
+   326→          <div className="flex items-start gap-3 rounded-xl border bg-[rgba(254,243,199,0.45)] p-3">
+   327→            <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
+   328→            <div className="space-y-2">
+   329→              <p className="text-xs leading-5">
+   330→                برای ثبت خودکار واریز و برداشت، برنامه باید پیامک‌های بانکی را بخواند.
+   331→                هیچ داده‌ای از گوشی شما خارج نمی‌شود و همه‌چیز روی خود دستگاه ذخیره می‌شود.
+   332→              </p>
+   333→              <Button size="sm" onClick={askPermission} className="bg-emerald-700 hover:bg-emerald-800">
+   334→                <ShieldCheck className="ml-1 h-4 w-4" /> اجازه دسترسی به پیامک‌ها
+   335→              </Button>
+   336→            </div>
+   337→          </div>
+   338→        ) : (
+   339→          <>
+   340→            <div className="flex items-center justify-between gap-2">
+   341→              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+   342→                <ShieldCheck className="h-4 w-4 text-emerald-600" />
+   343→                <span>دسترسی فعال — {lastSync > 0 ? `آخرین بررسی: ${new Date(lastSync).toLocaleString("fa-IR")}` : "هنوز بررسی نشده"}</span>
+   344→              </div>
+   345→              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={syncing} onClick={() => void runSync(false)}>
+   346→                <RefreshCw className={`ml-1 h-3 w-3 ${syncing ? "animate-spin" : ""}`} />
+   347→                {syncing ? "در حال بررسی..." : "بررسی الان"}
+   348→              </Button>
+   349→            </div>
+   350→            <div className="flex items-center justify-between rounded-xl border p-3">
+   351→              <div className="pl-3">
+   352→                <div className="text-sm font-medium">ثبت خودکار تراکنش‌ها</div>
+   353→                <p className="text-[11px] leading-4 text-muted-foreground">
+   354→                  پیامک‌های واریز/برداشت با مبلغ واضح، بدون دست وارد شوند؛ موارد نامطمئن در صف بررسی می‌مانند
+   355→                </p>
+   356→              </div>
+   357→              <Switch
+   358→                checked={autoImport}
+   359→                onCheckedChange={(v) => {
+   360→                  setAutoImport(v);
+   361→                  void setMeta("smsAutoImport", v);
+   362→                }}
+   363→              />
+   364→            </div>
+   365→            <div className="flex items-center justify-between rounded-xl border p-3">
+   366→              <div className="pl-3">
+   367→                <div className="text-sm font-medium">تبدیل ریال به تومان</div>
+   368→                <p className="text-[11px] leading-4 text-muted-foreground">
+   369→                  مبالغ پیامک بانک‌ها معمولاً ریال است؛ هنگام ثبت خودکار تقسیم بر ۱۰ می‌شود
+   370→                </p>
+   371→              </div>
+   372→              <Switch
+   373→                checked={convertRial}
+   374→                onCheckedChange={(v) => {
+   375→                  setConvertRial(v);
+   376→                  void setMeta("smsConvertRial", v);
+   377→                }}
+   378→              />
+   379→            </div>
+   380→          </>
+   381→        )}
+   382→      </CardContent>
+   383→    </Card>
+   384→  );
+   385→}
+   386→
+   387→function SmsSection({ accounts }: { accounts: BankAccount[] }) {
+   388→  const { toast } = useToast();
+   389→  const qc = useQueryClient();
+   390→  const [text, setText] = useState("");
+   391→  const [preview, setPreview] = useState<{ type: string; amount: number | null; bankName: string | null; confidence: number } | null>(null);
+   392→  const [importLog, setImportLog] = useState<SmsLog | null>(null);
+   393→  const [importAmount, setImportAmount] = useState("");
+   394→  const [importPurpose, setImportPurpose] = useState("");
+   395→  const [importAccount, setImportAccount] = useState("");
+   396→
+   397→  const { data: logs, isLoading } = useQuery<SmsLog[]>({
+   398→    queryKey: ["sms-logs"],
+   399→    queryFn: () => api.get("/api/sms"),
+   400→  });
+   401→
+   402→  const parseMutation = useMutation({
+   403→    mutationFn: (t: string) => api.post<{ type: string; amount: number | null; bankName: string | null; confidence: number }>("/api/sms/parse", { text: t }),
+   404→    onSuccess: (p) => {
+   405→      setPreview(p);
+   406→      if (p.confidence < 0.55) {
+   407→        toast({ title: "تشخیص نامطمئن", description: "پیامک ذخیره شد ولی نوع یا مبلغ مشخص نشد. می‌توانید دستی وارد کنید.", variant: "destructive" });
+   408→      }
+   409→    },
+   410→    onError: (e: Error) => toast({ title: "خطا", description: e.message, variant: "destructive" }),
+   411→  });
+   412→
+   413→  const saveMutation = useMutation({
+   414→    mutationFn: async () => {
+   415→      const res = await api.post<{ log: SmsLog }>("/api/sms", { text });
+   416→      return res.log;
+   417→    },
+   418→    onSuccess: () => {
+   419→      qc.invalidateQueries({ queryKey: ["sms-logs"] });
+   420→      toast({ title: "پیامک به صف وارد شد" });
+   421→      setText("");
+   422→      setPreview(null);
+   423→    },
+   424→    onError: (e: Error) => toast({ title: "خطا", description: e.message, variant: "destructive" }),
+   425→  });
+   426→
+   427→  const actionMutation = useMutation({
+   428→    mutationFn: ({ id, body }: { id: string; body: Record<string, unknown> }) => api.put(`/api/sms/${id}`, body),
+   429→    onSuccess: () => {
+   430→      qc.invalidateQueries({ queryKey: ["sms-logs"] });
+   431→      qc.invalidateQueries({ queryKey: ["transactions"] });
+   432→      qc.invalidateQueries({ queryKey: ["stats"] });
+   433→      toast({ title: "انجام شد" });
+   434→      setImportLog(null);
+   435→      setImportPurpose("");
+   436→    },
+   437→    onError: (e: Error) => toast({ title: "خطا", description: e.message, variant: "destructive" }),
+   438→  });
+   439→
+   440→  const deleteMutation = useMutation({
+   441→    mutationFn: (id: string) => api.del(`/api/sms/${id}`),
+   442→    onSuccess: () => qc.invalidateQueries({ queryKey: ["sms-logs"] }),
+   443→  });
+   444→
+   445→  const pending = (logs || []).filter((l) => l.status === "pending");
+   446→  const processed = (logs || []).filter((l) => l.status !== "pending");
+   447→
+   448→  return (
+   449→    <div className="space-y-4">
+   450→      {/* خواندن خودکار پیامک (فقط در اپ اندروید نمایش داده می‌شود) */}
+   451→      <SmsAutoSync />
+   452→
+   453→      {/* ورود پیامک */}
+   454→      <Card>
+   455→        <CardHeader className="pb-2">
+   456→          <CardTitle className="flex items-center gap-2 text-base">
+   457→            <MessageSquareText className="h-4 w-4 text-emerald-700" />
+   458→            ورود پیامک بانکی
+   459→          </CardTitle>
+   460→        </CardHeader>
+   461→        <CardContent className="space-y-3">
+   462→          <p className="text-xs leading-5 text-muted-foreground">
+   463→            پیامک واریز یا برداشت بانک را کپی و اینجا بچسبانید. نرم‌افزار به‌طور خودکار نوع (واریز/برداشت)، مبلغ و نام بانک را تشخیص می‌دهد.
+   464→            در نسخه اندروید، پیامک‌ها به‌صورت خودکار خوانده و وارد می‌شوند.
+   465→          </p>
+   466→          <textarea
+   467→            dir="rtl"
+   468→            rows={3}
+   469→            className="w-full rounded-xl border bg-background p-3 text-sm outline-none focus:ring-2 focus:ring-[rgba(5,150,105,0.4)]"
+   470→            placeholder="مثال: بانک ملت: برداشت مبلغ 500,000 ریال از حساب 1234 بابت خرید"
+   471→            value={text}
+   472→            onChange={(e) => setText(e.target.value)}
+   473→          />
+   474→          {preview && (
+   475→            <div className="rounded-xl border bg-[rgba(236,242,238,0.5)] p-3 text-sm">
+   476→              <div className="mb-1 flex items-center gap-1.5 font-medium text-emerald-800">
+   477→                <Sparkles className="h-4 w-4" /> نتیجه تشخیص خودکار
+   478→              </div>
+   479→              <div className="grid grid-cols-3 gap-2 text-center">
+   480→                <div>
+   481→                  <div className="text-xs text-muted-foreground">نوع</div>
+   482→                  <div className="font-bold">{preview.type === "income" ? "واریز ↑" : preview.type === "expense" ? "برداشت ↓" : "نامشخص"}</div>
+   483→                </div>
+   484→                <div>
+   485→                  <div className="text-xs text-muted-foreground">مبلغ</div>
+   486→                  <div className="font-bold tabular-nums-persian">{preview.amount ? formatMoney(preview.amount) : "نامشخص"}</div>
+   487→                </div>
+   488→                <div>
+   489→                  <div className="text-xs text-muted-foreground">بانک</div>
+   490→                  <div className="font-bold">{preview.bankName || "نامشخص"}</div>
+   491→                </div>
+   492→              </div>
+   493→            </div>
+   494→          )}
+   495→          <div className="flex gap-2">
+   496→            <Button
+   497→              variant="outline"
+   498→              onClick={() => parseMutation.mutate(text)}
+   499→              disabled={!text.trim() || parseMutation.isPending}
+   500→              className="flex-1"
+   501→            >
+   502→              پیش‌نمایش تشخیص
+   503→            </Button>
+   504→            <Button onClick={() => saveMutation.mutate()} disabled={!text.trim() || saveMutation.isPending} className="flex-1 bg-emerald-700 hover:bg-emerald-800">
+   505→              <Inbox className="ml-1 h-4 w-4" /> افزودن به صف
+   506→            </Button>
+   507→          </div>
+   508→        </CardContent>
+   509→      </Card>
+   510→
+   511→      {/* صف پیامک‌ها */}
+   512→      <Card>
+   513→        <CardHeader className="pb-2">
+   514→          <CardTitle className="text-base">
+   515→            صف پیامک‌ها {pending.length > 0 && <Badge className="mr-1 bg-emerald-700">{pending.length}</Badge>}
+   516→          </CardTitle>
+   517→        </CardHeader>
+   518→        <CardContent className="space-y-2">
+   519→          {isLoading ? (
+   520→            <Skeleton className="h-20 rounded-xl" />
+   521→          ) : pending.length === 0 ? (
+   522→            <p className="py-4 text-center text-sm text-muted-foreground">پیامک جدیدی در صف نیست</p>
+   523→          ) : (
+   524→            pending.map((log) => (
+   525→              <div key={log.id} className="rounded-xl border p-3">
+   526→                <p className="text-xs leading-5 text-muted-foreground" dir="rtl">
+   527→                  {log.rawText}
+   528→                </p>
+   529→                <div className="mt-2 flex flex-wrap items-center justify-between gap-2">
+   530→                  <div className="flex items-center gap-2 text-xs">
+   531→                    <Badge variant={log.parsedType === "income" ? "default" : "destructive"} className={log.parsedType === "income" ? "bg-emerald-700" : ""}>
+   532→                      {log.parsedType === "income" ? "واریز" : log.parsedType === "expense" ? "برداشت" : "نامشخص"}
+   533→                    </Badge>
+   534→                    <span className="font-bold tabular-nums-persian">{log.parsedAmount ? formatMoney(log.parsedAmount) : "؟"}</span>
+   535→                    {log.bankName && <span className="text-muted-foreground">• بانک {log.bankName}</span>}
+   536→                  </div>
+   537→                  <div className="flex gap-1">
+   538→                    <Button size="sm" className="h-7 bg-emerald-700 text-xs hover:bg-emerald-800" onClick={() => { setImportAmount(log.parsedAmount ? formatMoneyPlain(log.parsedAmount) : ""); setImportLog(log); }}>
+   539→                      <Download className="ml-1 h-3 w-3" /> ثبت تراکنش
+   540→                    </Button>
+   541→                    <Button
+   542→                      size="sm"
+   543→                      variant="outline"
+   544→                      className="h-7 text-xs"
+   545→                      onClick={() => actionMutation.mutate({ id: log.id, body: { action: "ignore" } })}
+   546→                    >
+   547→                      <XCircle className="ml-1 h-3 w-3" /> نادیده
+   548→                    </Button>
+   549→                    <Button size="icon" variant="ghost" className="h-7 w-7" onClick={() => deleteMutation.mutate(log.id)}>
+   550→                      <Trash2 className="h-3.5 w-3.5 text-red-500" />
+   551→                    </Button>
+   552→                  </div>
+   553→                </div>
+   554→              </div>
+   555→            ))
+   556→          )}
+   557→        </CardContent>
+   558→      </Card>
+   559→
+   560→      {/* تاریخچه پردازش‌شده */}
+   561→      {processed.length > 0 && (
+   562→        <Card>
+   563→          <CardHeader className="pb-2">
+   564→            <CardTitle className="text-base">پردازش‌شده‌ها</CardTitle>
+   565→          </CardHeader>
+   566→          <CardContent className="max-h-48 space-y-1.5 overflow-y-auto">
+   567→            {processed.map((log) => (
+   568→              <div key={log.id} className="flex items-center justify-between rounded-lg border px-3 py-2 text-xs">
+   569→                <span className="line-clamp-1 max-w-[60%] text-muted-foreground">{log.rawText}</span>
+   570→                <div className="flex items-center gap-2">
+   571→                  {log.status === "imported" ? (
+   572→                    <Badge className="bg-emerald-100 text-emerald-800 hover:bg-emerald-100">
+   573→                      <CheckCheck className="ml-1 h-3 w-3" /> ثبت شد
+   574→                    </Badge>
+   575→                  ) : (
+   576→                    <Badge variant="secondary">نادیده</Badge>
+   577→                  )}
+   578→                  <button onClick={() => deleteMutation.mutate(log.id)} className="text-red-400 hover:text-red-600">
+   579→                    <Trash2 className="h-3.5 w-3.5" />
+   580→                  </button>
+   581→                </div>
+   582→              </div>
+   583→            ))}
+   584→          </CardContent>
+   585→        </Card>
+   586→      )}
+   587→
+   588→      {/* دیالوگ ثبت تراکنش از پیامک */}
+   589→      <Dialog open={!!importLog} onOpenChange={(v) => !v && setImportLog(null)}>
+   590→        <DialogContent className="sm:max-w-sm" dir="rtl">
+   591→          <DialogHeader>
+   592→            <DialogTitle>ثبت تراکنش از پیامک</DialogTitle>
+   593→          </DialogHeader>
+   594→          {importLog && (
+   595→            <div className="grid gap-4 py-1">
+   596→              <p className="rounded-lg bg-muted p-2 text-xs leading-5 text-muted-foreground">{importLog.rawText}</p>
+   597→              <div className="grid grid-cols-2 gap-3">
+   598→                <div className="grid gap-2">
+   599→                  <Label>نوع</Label>
+   600→                  <p className="rounded-lg border p-2 text-sm font-bold">
+   601→                    {importLog.parsedType === "income" ? "واریز ↑" : "برداشت ↓"}
+   602→                  </p>
+   603→                </div>
+   604→                <div className="grid gap-2">
+   605→                  <Label>مبلغ (قابل اصلاح)</Label>
+   606→                  <SmsAmountInput
+   607→                    initial={importLog.parsedAmount}
+   608→                    value={importAmount}
+   609→                    onChange={setImportAmount}
+   610→                  />
+   611→                </div>
+   612→              </div>
+   613→              <div className="grid gap-2">
+   614→                <Label>بابت (اختیاری)</Label>
+   615→                <Input placeholder="مثلاً: خرید از فروشگاه" value={importPurpose} onChange={(e) => setImportPurpose(e.target.value)} />
+   616→              </div>
+   617→              <div className="grid gap-2">
+   618→                <Label>حساب بانکی</Label>
+   619→                <Select value={importAccount} onValueChange={setImportAccount}>
+   620→                  <SelectTrigger>
+   621→                    <SelectValue placeholder="انتخاب حساب" />
+   622→                  </SelectTrigger>
+   623→                  <SelectContent>
+   624→                    <SelectItem value="none">بدون حساب</SelectItem>
+   625→                    {accounts.map((a) => (
+   626→                      <SelectItem key={a.id} value={a.id}>
+   627→                        {a.name} {importLog.bankName && a.bankName.includes(importLog.bankName) ? "✓" : ""}
+   628→                      </SelectItem>
+   629→                    ))}
+   630→                  </SelectContent>
+   631→                </Select>
+   632→              </div>
+   633→            </div>
+   634→          )}
+   635→          <DialogFooter>
+   636→            <Button variant="outline" onClick={() => setImportLog(null)}>
+   637→              انصراف
+   638→            </Button>
+   639→            <Button
+   640→              className="bg-emerald-700 hover:bg-emerald-800"
+   641→              disabled={actionMutation.isPending || parseMoneyInput(importAmount) <= 0}
+   642→              onClick={() =>
+   643→                importLog &&
+   644→                actionMutation.mutate({
+   645→                  id: importLog.id,
+   646→                  body: {
+   647→                    action: "import",
+   648→                    type: importLog.parsedType || "expense",
+   649→                    amount: parseMoneyInput(importAmount),
+   650→                    purpose: importPurpose || null,
+   651→                    bankAccountId: importAccount || null,
+   652→                  },
+   653→                })
+   654→              }
+   655→            >
+   656→              {actionMutation.isPending ? "..." : "ثبت"}
+   657→            </Button>
+   658→          </DialogFooter>
+   659→        </DialogContent>
+   660→      </Dialog>
+   661→    </div>
+   662→  );
+   663→}
+   664→
+   665→function SmsAmountInput({ initial, value, onChange }: { initial: number | null; value: string; onChange: (v: string) => void }) {
+   666→  return (
+   667→    <Input
+   668→      inputMode="numeric"
+   669→      dir="ltr"
+   670→      className="text-left font-bold tabular-nums-persian"
+   671→      value={value ? formatMoneyPlain(parseMoneyInput(value)) : ""}
+   672→      onChange={(e) => onChange(e.target.value)}
+   673→    />
+   674→  );
+   675→}
+   676→
+   677→export function Banks({ onOpenTxDialog }: { onOpenTxDialog?: () => void }) {
+   678→  const { toast } = useToast();
+   679→  const qc = useQueryClient();
+   680→  const [addOpen, setAddOpen] = useState(false);
+   681→  const [editing, setEditing] = useState<BankAccount | null>(null);
+   682→
+   683→  const { data: accounts, isLoading } = useQuery<BankAccount[]>({
+   684→    queryKey: ["bank-accounts"],
+   685→    queryFn: () => api.get("/api/bank-accounts"),
+   686→  });
+   687→
+   688→  const { data: transactions } = useQuery<Transaction[]>({
+   689→    queryKey: ["transactions", "all"],
+   690→    queryFn: () => api.get("/api/transactions?limit=500"),
+   691→  });
+   692→
+   693→  const deleteMutation = useMutation({
+   694→    mutationFn: (id: string) => api.del(`/api/bank-accounts/${id}`),
+   695→    onSuccess: () => {
+   696→      qc.invalidateQueries({ queryKey: ["bank-accounts"] });
+   697→      qc.invalidateQueries({ queryKey: ["stats"] });
+   698→      toast({ title: "حساب حذف شد" });
+   699→    },
+   700→    onError: (e: Error) => toast({ title: "خطا", description: e.message, variant: "destructive" }),
+   701→  });
+   702→
+   703→  return (
+   704→    <div className="space-y-4">
+   705→      <div className="flex items-center gap-2">
+   706→        <Button onClick={() => { setEditing(null); setAddOpen(true); }} className="bg-emerald-700 hover:bg-emerald-800">
+   707→          <Plus className="ml-1 h-4 w-4" /> حساب جدید
+   708→        </Button>
+   709→        {onOpenTxDialog && (
+   710→          <Button variant="outline" onClick={onOpenTxDialog}>
+   711→            <Wallet className="ml-1 h-4 w-4" /> ثبت تراکنش دستی
+   712→          </Button>
+   713→        )}
+   714→      </div>
+   715→
+   716→      {/* کارت حساب‌ها */}
+   717→      {isLoading ? (
+   718→        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+   719→          {[...Array(3)].map((_, i) => (
+   720→            <Skeleton key={i} className="h-36 rounded-2xl" />
+   721→          ))}
+   722→        </div>
+   723→      ) : !accounts || accounts.length === 0 ? (
+   724→        <Card>
+   725→          <CardContent className="flex flex-col items-center gap-2 py-10 text-center">
+   726→            <Landmark className="h-10 w-10 text-[rgba(90,103,95,0.4)]" />
+   727→            <p className="font-medium">حساب بانکی ثبت نشده</p>
+   728→            <p className="text-sm text-muted-foreground">می‌توانید چند حساب بانکی اضافه کنید و پیامک‌های هر کدام را مدیریت کنید</p>
+   729→            <Button onClick={() => setAddOpen(true)} className="mt-2 bg-emerald-700 hover:bg-emerald-800">
+   730→              <Plus className="ml-1 h-4 w-4" /> افزودن اولین حساب
+   731→            </Button>
+   732→          </CardContent>
+   733→        </Card>
+   734→      ) : (
+   735→        <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+   736→          {accounts.map((acc) => {
+   737→            const accTxs = (transactions || []).filter((t) => t.bankAccountId === acc.id);
+   738→            const inc = accTxs.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0);
+   739→            const exp = accTxs.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0);
+   740→            const balance = acc.initialBalance + inc - exp;
+   741→            const maskedCard = acc.cardNumber ? `•••• ${acc.cardNumber.slice(-4)}` : null;
+   742→            return (
+   743→              <Card key={acc.id} className="relative overflow-hidden py-0">
+   744→                <div className="absolute inset-x-0 top-0 h-1.5" style={{ backgroundColor: acc.color }} />
+   745→                <CardContent className="p-4">
+   746→                  <div className="flex items-start justify-between">
+   747→                    <div>
+   748→                      <div className="font-bold">{acc.name}</div>
+   749→                      <div className="text-xs text-muted-foreground">بانک {acc.bankName}</div>
+   750→                    </div>
+   751→                    <DropdownMenu>
+   752→                      <DropdownMenuTrigger asChild>
+   753→                        <Button variant="ghost" size="icon" className="h-8 w-8">
+   754→                          <MoreVertical className="h-4 w-4" />
+   755→                        </Button>
+   756→                      </DropdownMenuTrigger>
+   757→                      <DropdownMenuContent align="end">
+   758→                        <DropdownMenuItem onClick={() => { setEditing(acc); setAddOpen(true); }}>
+   759→                          <Pencil className="ml-2 h-4 w-4" /> ویرایش
+   760→                        </DropdownMenuItem>
+   761→                        <DropdownMenuItem
+   762→                          className="text-red-600"
+   763→                          onClick={() => {
+   764→                            if (confirm(`حذف حساب ${acc.name}؟ تراکنش‌هایش حذف نمی‌شوند.`)) deleteMutation.mutate(acc.id);
+   765→                          }}
+   766→                        >
+   767→                          <Trash2 className="ml-2 h-4 w-4" /> حذف
+   768→                        </DropdownMenuItem>
+   769→                      </DropdownMenuContent>
+   770→                    </DropdownMenu>
+   771→                  </div>
+   772→                  {maskedCard && <div dir="ltr" className="mt-2 text-sm tracking-widest text-muted-foreground">{maskedCard}</div>}
+   773→                  <div className="mt-3 text-2xl font-bold tabular-nums-persian">
+   774→                    {formatMoney(balance)}
+   775→                    <span className="mr-1 text-xs font-normal text-muted-foreground">تومان</span>
+   776→                  </div>
+   777→                  <div className="mt-3 space-y-1 text-xs text-muted-foreground">
+   778→                    <div className="flex justify-between">
+   779→                      <span>موجودی اولیه</span>
+   780→                      <span className="tabular-nums-persian">{formatMoney(acc.initialBalance)}</span>
+   781→                    </div>
+   782→                    <div className="flex justify-between text-emerald-700">
+   783→                      <span>جمع واریز</span>
+   784→                      <span className="tabular-nums-persian">+{formatMoney(inc)}</span>
+   785→                    </div>
+   786→                    <div className="flex justify-between text-red-600">
+   787→                      <span>جمع برداشت</span>
+   788→                      <span className="tabular-nums-persian">−{formatMoney(exp)}</span>
+   789→                    </div>
+   790→                    <Progress value={Math.min(100, (exp / Math.max(1, inc)) * 100)} className="mt-1 h-1" />
+   791→                  </div>
+   792→                </CardContent>
+   793→              </Card>
+   794→            );
+   795→          })}
+   796→        </div>
+   797→      )}
+   798→
+   799→      <SmsSection accounts={accounts || []} />
+   800→
+   801→      {addOpen && <AccountDialog open={addOpen} onOpenChange={setAddOpen} editing={editing} />}
+   802→    </div>
+   803→  );
+   804→}
+   805→
