@@ -94,11 +94,21 @@ function AccountDialog({
   const [cardNumber, setCardNumber] = useState(editing?.cardNumber || "");
   const [accountNumber, setAccountNumber] = useState(editing?.accountNumber || "");
   const [iban, setIban] = useState(editing?.iban || "");
-  const [smsSender, setSmsSender] = useState(editing?.smsSender || "");
+  const [senders, setSenders] = useState<string[]>(
+    editing?.smsSender ? editing.smsSender.split(/[,،]/).map((s) => s.trim()).filter(Boolean) : []
+  );
+  const [senderInput, setSenderInput] = useState("");
   const [initialBalance, setInitialBalance] = useState(
     editing ? formatMoneyPlain(toDisplayAmount(editing.initialBalance)) : ""
   );
   const [color, setColor] = useState(editing?.color || COLORS[0]);
+
+  const addSender = () => {
+    const v = senderInput.trim();
+    if (!v) return;
+    if (!senders.some((s) => s.toLowerCase() === v.toLowerCase())) setSenders([...senders, v]);
+    setSenderInput("");
+  };
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -108,7 +118,7 @@ function AccountDialog({
         cardNumber: cardNumber || null,
         accountNumber: accountNumber || null,
         iban: iban || null,
-        smsSender: smsSender.trim() || null,
+        smsSender: senders.join(",") || null,
         initialBalance: toStoredAmount(parseMoneyInput(initialBalance)),
         color,
       };
@@ -167,11 +177,49 @@ function AccountDialog({
             <Input dir="ltr" className="text-left" placeholder="IR..." value={iban} onChange={(e) => setIban(e.target.value)} />
           </div>
           <div className="grid gap-2">
-            <Label>شماره فرستنده پیامک بانک (برای خواندن خودکار)</Label>
-            <Input dir="ltr" className="text-left" placeholder="9999, 5000142" value={smsSender} onChange={(e) => setSmsSender(e.target.value)} />
+            <Label>شماره(های) فرستنده پیامک بانک (برای خواندن خودکار)</Label>
+            <div className="flex gap-2">
+              <Input
+                dir="ltr"
+                className="text-left"
+                placeholder="مثلاً 9999 یا 5000142 — بعد Enter بزنید"
+                value={senderInput}
+                onChange={(e) => setSenderInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    addSender();
+                  }
+                }}
+              />
+              <Button type="button" variant="outline" className="shrink-0" onClick={addSender} disabled={!senderInput.trim()}>
+                <Plus className="h-4 w-4" /> افزودن
+              </Button>
+            </div>
+            {senders.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {senders.map((s) => (
+                  <span
+                    key={s}
+                    dir="ltr"
+                    className="flex items-center gap-1 rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-800 dark:bg-emerald-950/50 dark:text-emerald-300"
+                  >
+                    {s}
+                    <button
+                      type="button"
+                      onClick={() => setSenders(senders.filter((x) => x !== s))}
+                      className="text-emerald-600 hover:text-red-600 dark:text-emerald-400"
+                      aria-label={`حذف ${s}`}
+                    >
+                      ×
+                    </button>
+                  </span>
+                ))}
+              </div>
+            )}
             <p className="text-xs text-muted-foreground leading-5">
-              فقط پیامک‌های همین شماره(ها) خوانده می‌شود — چند شماره را با کاما جدا کنید. اگر چند حساب در یک بانک دارید،
-              شماره حساب/کارت هر حساب را دقیق وارد کنید تا پیامک‌ها تفکیک شوند.
+              فقط پیامک‌های همین شماره‌ها خوانده می‌شود — هر چند شماره که بانک استفاده می‌کند اضافه کنید (شماره فرستنده را از خود پیامک ببینید).
+              اگر چند حساب در یک بانک دارید، شماره حساب/کارت هر حساب را دقیق وارد کنید تا پیامک‌ها تفکیک شوند.
             </p>
           </div>
           <div className="grid gap-2">
@@ -541,6 +589,7 @@ function SmsSection({ accounts }: { accounts: BankAccount[] }) {
                     </Badge>
                     <span className="font-bold tabular-nums-persian">{log.parsedAmount ? formatMoneyU(log.parsedAmount) : "؟"}</span>
                     {log.bankName && <span className="text-muted-foreground">• بانک {log.bankName}</span>}
+                    {log.sender && <span dir="ltr" className="text-muted-foreground">• از {log.sender}</span>}
                   </div>
                   <div className="flex gap-1">
                     <Button size="sm" className="h-7 bg-emerald-700 text-xs hover:bg-emerald-800" onClick={() => { setImportType(log.parsedType === "income" ? "income" : "expense"); setImportAmount(log.parsedAmount ? formatMoneyPlain(toDisplayAmount(log.parsedAmount)) : ""); setImportLog(log); }}>

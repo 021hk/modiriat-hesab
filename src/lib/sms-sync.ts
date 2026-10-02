@@ -161,10 +161,6 @@ async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
     }
 
     const parsed = parseBankSms(text);
-    if (!parsed.amount || parsed.amount <= 0) {
-      bankCount++; // متن بانکی ولی بدون مبلغ مشخص → صف نمی‌شود
-      continue;
-    }
 
     // ─── تفکیک حساب‌ها داخل یک شماره ───
     // اگر پیامک شماره حساب/کارت دارد، باید با یکی از حساب‌های خودمان بخواند؛ وگرنه مال حساب دیگری است → رد
@@ -183,7 +179,7 @@ async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
     bankCount++;
 
     // واحد پول: مبالغ همیشه به «ریال» ذخیره می‌شوند (نمایش بر اساس تنظیم کاربر تبدیل می‌شود)
-    const finalAmount = parsed.amount;
+    const finalAmount = parsed.amount && parsed.amount > 0 ? parsed.amount : null;
 
     const dateIso = new Date(msg.date).toISOString();
     const baseLog = {
@@ -197,10 +193,21 @@ async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
       createdAt: dateIso,
     };
 
+    // ─── پیامک ناشناخته (مبلغ یا نوع تشخیص نشد) → هرگز گم نمی‌شود؛ در صف بررسی می‌آید ───
+    // کاربر می‌تواند مبلغ و نوع را دستی وارد کند یا یک ضرب نادیده بگیرد
+    if (!finalAmount) {
+      const log = { ...baseLog, status: "pending" as const };
+      await dbPut(STORES.smsLogs, log);
+      seenNative.add(nativeId);
+      queued++;
+      continue;
+    }
+
     if (
       autoImport &&
       parsed.confidence >= AUTO_CONFIDENCE &&
       (parsed.type === "income" || parsed.type === "expense") &&
+      finalAmount &&
       finalAmount > 0
     ) {
       // ثبت خودکار تراکنش
