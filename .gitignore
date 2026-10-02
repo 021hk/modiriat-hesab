@@ -69,3 +69,9 @@ android/app/src/main/assets/public/
 assets/generated/
 *.keystore
 !android/hesabyar.keystore
+
+# sandbox JDK / env noise (committed by mistake once — never again)
+.jdk/
+tool-results/
+.z-ai-config/
+.next/

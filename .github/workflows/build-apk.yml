@@ -1,0 +1,77 @@
+name: Build Android APK
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - "src/**"
+      - "android/**"
+      - "public/**"
+      - "package.json"
+      - "next.config.ts"
+      - ".github/workflows/build-apk.yml"
+    tags: ["v*"]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile || bun install
+
+      - name: Build web (Next.js static export)
+        run: bun run build
+
+      - name: Sync Capacitor
+        run: npx cap sync android
+
+      - name: Grant execute permission for gradlew
+        run: chmod +x android/gradlew
+
+      - name: Build signed release APK
+        working-directory: android
+        run: ./gradlew assembleRelease --no-daemon
+
+      - name: Read version name
+        id: ver
+        working-directory: android
+        run: |
+          VN=$(grep -oP 'versionName "\K[^"]+' app/build.gradle)
+          VC=$(grep -oP 'versionCode \K[0-9]+' app/build.gradle)
+          echo "name=$VN" >> $GITHUB_OUTPUT
+          echo "code=$VC" >> $GITHUB_OUTPUT
+          echo "version=$VN.$VC"
+
+      - name: Rename APK
+        run: |
+          cp android/app/build/outputs/apk/release/app-release.apk \
+             hesab-yar-v${{ steps.ver.outputs.name }}.apk
+
+      - name: Upload artifact (always)
+        uses: actions/upload-artifact@v4
+        with:
+          name: hesab-yar-v${{ steps.ver.outputs.name }}-apk
+          path: hesab-yar-v${{ steps.ver.outputs.name }}.apk
+          if-no-files-found: error
+
+      - name: Attach to GitHub Release (on tag)
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: hesab-yar-v${{ steps.ver.outputs.name }}.apk
+          generate_release_notes: true
