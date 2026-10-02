@@ -38,3 +38,21 @@ Work Log:
 Stage Summary:
 - main = v2.2.0 (کامیت a2ddc72)، flutter-version = نسخه Flutter موازی
 - JDK 21 در .jdk/ و SDK در .android-sdk/ برای بیلدهای بعدی؛ keystore در android/hesabyar.keystore (پسورد: hesabyar2024)
+
+---
+Task ID: 7
+Agent: Main Agent (Super Z)
+Task: انتشار Release رسمی v2.2.0 روی گیت‌هاب + CI بیلد خودکار APK
+
+Work Log:
+- کاربر گفت «روی گیت‌هاب منتشر نکردی» → بررسی: کد v2.2.0 پوش شده بود ولی هیچ Release با APK وجود نداشت (فقط تگ v1.0.0)
+- commit خودکار محیط (4a8110d) که کل .jdk با حجم 346MB را کامیت کرده بود → با git reset --mixed HEAD~1 حذف شد (به گیت‌هاب نرفته بود — خوشبختانه)
+- .gitignore: افزودن .jdk/ و tool-results/ و .next/ برای جلوگیری دائمی از کامیت شدن نویز محیطی؛ git config core.filemode false برای نویز chmod محیط
+- ساخت .github/workflows/build-apk.yml: روی هر push به main (مسیرهای src/android/public) یا تگ v* → Java 17 + Bun + next build (export استاتیک) + cap sync + gradlew assembleRelease (ساین با hesabyar.keystore داخل گیت) → آپلود artifact + اتصال به Release در صورت تگ
+- ساخت Release v2.2.0 با API (اسکریپت scripts/create-release.sh — توکن از .git/config خوانده شد و هرگز نمایش داده نشد): تگ v2.2.0 روی main + توضیحات کامل فارسی (تغییرات + روش نصب + نکته حذف نسخه قبلی) + آپلود hesab-yar-v2.2.0.apk (4.1MB)
+- تأیید: لینک مستقیم دانلود بدون لاگین 200 / صفحه release 200 / CI شروع به بیلد کرد
+
+Stage Summary:
+- لینک دانلود رسمی: https://github.com/021hk/modiriat-hesab/releases/download/v2.2.0/hesab-yar-v2.2.0.apk
+- صفحه Release: https://github.com/021hk/modiriat-hesab/releases/tag/v2.2.0
+- از این پس هر تغییر در main → CI خودکار APK می‌سازد و artifact می‌دهد؛ تگ v* → مستقیم به Release اضافه می‌شود
