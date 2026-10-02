@@ -16,6 +16,8 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    permissions:
+      contents: write # برای ساخت/به‌روزرسانی Release و آپلود APK
     steps:
       - name: Checkout
         uses: actions/checkout@v4
