@@ -83,7 +83,7 @@ export function Backup() {
           >
             <Download className="ml-2 h-4 w-4" /> دانلود فایل پشتیبان
           </Button>
-          <div className="rounded-xl bg-muted/60 p-3 text-xs leading-5 text-muted-foreground">
+          <div className="rounded-xl bg-[rgba(236,242,238,0.6)] p-3 text-xs leading-5 text-muted-foreground">
             <ShieldCheck className="mb-1 h-4 w-4 text-emerald-600" />
             توصیه: هر هفته یک نسخه پشتیبان تهیه و در جای امن (مثلاً تلگرام سیو شده یا گوگل‌درایو) نگه دارید.
           </div>

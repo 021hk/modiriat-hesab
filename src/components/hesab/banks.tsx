@@ -263,13 +263,13 @@ function SmsSection({ accounts }: { accounts: BankAccount[] }) {
           <textarea
             dir="rtl"
             rows={3}
-            className="w-full rounded-xl border bg-background p-3 text-sm outline-none focus:ring-2 focus:ring-emerald-600/40"
+            className="w-full rounded-xl border bg-background p-3 text-sm outline-none focus:ring-2 focus:ring-[rgba(5,150,105,0.4)]"
             placeholder="مثال: بانک ملت: برداشت مبلغ 500,000 ریال از حساب 1234 بابت خرید"
             value={text}
             onChange={(e) => setText(e.target.value)}
           />
           {preview && (
-            <div className="rounded-xl border bg-muted/50 p-3 text-sm">
+            <div className="rounded-xl border bg-[rgba(236,242,238,0.5)] p-3 text-sm">
               <div className="mb-1 flex items-center gap-1.5 font-medium text-emerald-800">
                 <Sparkles className="h-4 w-4" /> نتیجه تشخیص خودکار
               </div>
@@ -520,7 +520,7 @@ export function Banks({ onOpenTxDialog }: { onOpenTxDialog?: () => void }) {
       ) : !accounts || accounts.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-2 py-10 text-center">
-            <Landmark className="h-10 w-10 text-muted-foreground/40" />
+            <Landmark className="h-10 w-10 text-[rgba(90,103,95,0.4)]" />
             <p className="font-medium">حساب بانکی ثبت نشده</p>
             <p className="text-sm text-muted-foreground">می‌توانید چند حساب بانکی اضافه کنید و پیامک‌های هر کدام را مدیریت کنید</p>
             <Button onClick={() => setAddOpen(true)} className="mt-2 bg-emerald-700 hover:bg-emerald-800">

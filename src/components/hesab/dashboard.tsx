@@ -45,8 +45,8 @@ export function Dashboard({ onGoToTab }: { onGoToTab?: (tab: string) => void }) 
     <div className="space-y-4">
       {/* موجودی کل */}
       <div className="relative overflow-hidden rounded-2xl bg-gradient-to-bl from-emerald-600 via-emerald-700 to-teal-900 p-6 text-white shadow-lg">
-        <div className="absolute -left-8 -top-8 h-40 w-40 rounded-full bg-white/10" />
-        <div className="absolute -bottom-10 -right-4 h-32 w-32 rounded-full bg-white/10" />
+        <div className="absolute -left-8 -top-8 h-40 w-40 rounded-full bg-[rgba(255,255,255,0.1)]" />
+        <div className="absolute -bottom-10 -right-4 h-32 w-32 rounded-full bg-[rgba(255,255,255,0.1)]" />
         <div className="relative z-10">
           <div className="flex items-center gap-2 text-emerald-100">
             <Wallet className="h-4 w-4" />
@@ -60,13 +60,13 @@ export function Dashboard({ onGoToTab }: { onGoToTab?: (tab: string) => void }) 
             {data.accountSummaries.length === 0 ? (
               <button
                 onClick={() => onGoToTab?.("banks")}
-                className="rounded-full bg-white/15 px-4 py-1.5 text-sm backdrop-blur transition hover:bg-white/25"
+                className="rounded-full bg-[rgba(255,255,255,0.15)] px-4 py-1.5 text-sm backdrop-blur transition hover:bg-[rgba(255,255,255,0.25)]"
               >
                 + حساب بانکی خود را اضافه کنید
               </button>
             ) : (
               data.accountSummaries.map((acc) => (
-                <div key={acc.id} className="flex items-center gap-1.5 rounded-full bg-white/15 px-3 py-1.5 text-xs backdrop-blur">
+                <div key={acc.id} className="flex items-center gap-1.5 rounded-full bg-[rgba(255,255,255,0.15)] px-3 py-1.5 text-xs backdrop-blur">
                   <span className="h-2 w-2 rounded-full" style={{ backgroundColor: acc.color }} />
                   <span>{acc.name}</span>
                   <span className="font-bold tabular-nums-persian">{formatMoney(acc.balance)}</span>

@@ -40,7 +40,7 @@ function AppContent() {
   return (
     <div className="flex min-h-screen flex-col">
       {/* هدر */}
-      <header className="sticky top-0 z-20 border-b bg-card/90 backdrop-blur">
+      <header className="sticky top-0 z-20 border-b bg-[rgba(255,255,255,0.9)] backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
           <div className="flex items-center gap-2.5">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-bl from-emerald-500 to-emerald-700 text-white shadow">
@@ -96,7 +96,7 @@ function AppContent() {
       </main>
 
       {/* ناوبری پایین موبایل */}
-      <nav className="fixed inset-x-0 bottom-0 z-20 border-t bg-card/95 backdrop-blur lg:hidden" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
+      <nav className="fixed inset-x-0 bottom-0 z-20 border-t bg-[rgba(255,255,255,0.95)] backdrop-blur lg:hidden" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
         <div className="mx-auto grid max-w-lg grid-cols-6">
           {TABS.map((t) => (
             <button
@@ -116,7 +116,7 @@ function AppContent() {
       {/* فوتر */}
       <footer className="mt-auto hidden border-t bg-card py-4 lg:block">
         <div className="mx-auto max-w-6xl px-4 text-center text-xs text-muted-foreground">
-          حساب‌یار — نسخه ۱.۰.۰ | قابل نصب به‌عنوان اپلیکیشن روی اندروید، ویندوز، مک و لینوکس (PWA)
+          حساب‌یار — نسخه ۱.۱.۰ | قابل نصب به‌عنوان اپلیکیشن روی اندروید، ویندوز، مک و لینوکس (PWA)
         </div>
       </footer>
 

@@ -535,7 +535,7 @@ export function Debts() {
       ) : !data || data.length === 0 ? (
         <Card>
           <CardContent className="flex flex-col items-center gap-2 py-12 text-center">
-            <HandCoins className="h-10 w-10 text-muted-foreground/40" />
+            <HandCoins className="h-10 w-10 text-[rgba(90,103,95,0.4)]" />
             <p className="font-medium">بدهی‌ای ثبت نشده</p>
             <p className="text-sm text-muted-foreground">بدهکاران و طلبکاران خود را با عکس رسید ثبت کنید</p>
             <Button onClick={() => setAddOpen(true)} className="mt-2 bg-emerald-700 hover:bg-emerald-800">

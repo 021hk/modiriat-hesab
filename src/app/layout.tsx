@@ -35,9 +35,12 @@ export default function RootLayout({
   return (
     <html lang="fa" dir="rtl" suppressHydrationWarning>
       <head>
+        <meta name="color-scheme" content="light" />
         <style
           dangerouslySetInnerHTML={{
             __html: `
+              html { background-color: #f4f8f6; color-scheme: light; }
+              body { background-color: #f4f8f6; color: #0e1913; margin: 0; }
               @font-face {
                 font-family: 'Vazirmatn';
                 src: url('/fonts/Vazirmatn-Light.woff2') format('woff2');
@@ -102,6 +105,7 @@ export default function RootLayout({
           </div>
           <div style={{ fontSize: 18, fontWeight: 700, color: "#065f46" }}>حساب‌یار</div>
           <div
+            className="boot-spinner"
             style={{
               width: 28,
               height: 28,
@@ -116,11 +120,46 @@ export default function RootLayout({
               برای استفاده از برنامه، جاوااسکریپت را در مرورگر فعال کنید.
             </p>
           </noscript>
+          <div id="boot-error" style={{ display: "none", textAlign: "center", padding: "0 24px" }}>
+            <p style={{ color: "#065f46", fontSize: 13, marginBottom: 10 }}>
+              بارگذاری بیش از حد طول کشید. اتصال اینترنت را بررسی کنید.
+            </p>
+            <a
+              href="/"
+              style={{
+                display: "inline-block",
+                background: "#059669",
+                color: "#ffffff",
+                textDecoration: "none",
+                fontSize: 14,
+                fontWeight: 700,
+                padding: "8px 24px",
+                borderRadius: 10,
+              }}
+            >
+              تلاش دوباره
+            </a>
+          </div>
           <style>{`@keyframes bootspin{to{transform:rotate(360deg)}}`}</style>
-          {/* اطمینان: اگر جاوااسکریپت با خطا مواجه شد، اسپلش بعد از ۱۵ ثانیه حذف می‌شود */}
+          {/* اطمینان: اگر برنامه تا ۱۲ ثانیه بالا نیامد، یک‌بار صفحه رفرش می‌شود؛
+              اگر باز هم نشد، پیام خطا و دکمه «تلاش دوباره» نمایش داده می‌شود */}
           <script
             dangerouslySetInnerHTML={{
-              __html: `setTimeout(function(){var s=document.getElementById('boot-splash');if(s)s.parentNode&&s.parentNode.removeChild(s)},15000);`,
+              __html: `setTimeout(function(){
+                var s=document.getElementById('boot-splash');
+                if(!s)return;
+                try{
+                  if(!sessionStorage.getItem('boot-retried')){
+                    sessionStorage.setItem('boot-retried','1');
+                    location.reload();
+                    return;
+                  }
+                }catch(e){}
+                var sp=document.querySelector('#boot-splash .boot-spinner');
+                if(sp)sp.style.display='none';
+                var er=document.getElementById('boot-error');
+                if(er)er.style.display='block';
+              },12000);`,
             }}
           />
         </div>
