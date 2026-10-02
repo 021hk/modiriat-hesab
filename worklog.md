@@ -23,3 +23,18 @@ Stage Summary:
 - همه ۴ درخواست کاربر اعمال شد: ریال/تومان درست، پارسر SMS با فرمت نمونه او، بدون داده الکی، حالت شب در تنظیمات
 - APK ساین‌شده release در download/hesab-yar-v2.2.0.apk تحویل شد
 - commit + push به GitHub انجام شد
+
+---
+Task ID: 6 (appendix)
+Agent: Main Agent (Super Z)
+Task: نکات تکمیلی Task 6
+
+Work Log:
+- ریشه‌یابی گم‌شدن فایل‌های لایه داده: خط ۴۳ .gitignore الگوی local-* داشت که src/lib/local-api.ts و local-db.ts را نادیده می‌گرفت → قانون اصلاح شد (local-*.db / local-*.sqlite + استثنای !src/lib/local-*) و فایل‌ها کامیت شدند — دیگر هرگز گم نمی‌شوند
+- کشف: شاخه main در GitHub توسط یک سشن موازی با نسخه Flutter جایگزین شده بود (کامیت‌های cbf1e01/efdb18c/8493a1c شامل CI)؛ برای عدم از بین رفتن آن، شاخه flutter-version ساخته شد و main با نسخه ۲.۲.۰ (Next.js + Capacitor) به‌روزرسانی شد (force-push)
+- APK: download/hesab-yar-v2.2.0.apk (۴.۱MB، ساین با keystore جدید hesabyar، versionCode 4)
+- تست مرورگر: داشبورد خالی بدون داده الکی ✓، تب تنظیمات (تم + واحد پول + پشتیبان) ✓، حالت تاریک کامل ✓، ورود ۴۷,۳۰۰ تومان → ذخیره ۴۷۳,۰۰۰ ریال → نمایش ۴۷,۳۰۰ تومان ✓
+
+Stage Summary:
+- main = v2.2.0 (کامیت a2ddc72)، flutter-version = نسخه Flutter موازی
+- JDK 21 در .jdk/ و SDK در .android-sdk/ برای بیلدهای بعدی؛ keystore در android/hesabyar.keystore (پسورد: hesabyar2024)
