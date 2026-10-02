@@ -1,0 +1,13 @@
+{
+  "app": "modiriat-hesab",
+  "version": 1,
+  "exportedAt": "2026-10-02T16:42:29.361Z",
+  "data": {
+    "categories": [],
+    "bankAccounts": [],
+    "transactions": [],
+    "debts": [],
+    "attachments": [],
+    "smsLogs": []
+  }
+}

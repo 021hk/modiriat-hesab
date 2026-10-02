@@ -3,8 +3,7 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { SwRegister } from "@/components/sw-register";
 
-// HTML هرگز کش نشود (قبلاً s-maxage=31536000 داشت که ریشه HTML کهنه و صفحه سیاه بود)
-export const dynamic = "force-dynamic";
+// نسخه ۲.۰: برنامه کاملاً آفلاین است — داده‌ها در IndexedDB خود دستگاه ذخیره می‌شوند
 
 export const metadata: Metadata = {
   title: "مدیریت حساب | حساب‌یار",

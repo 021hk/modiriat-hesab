@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -244,6 +244,25 @@ function PaymentDialog({ debt, open, onOpenChange }: { debt: Debt; open: boolean
   );
 }
 
+// نمایش عکس پیوست از دیتابیس محلی (بدون سرور)
+function AttImg({ attId, fileName, className }: { attId: string; fileName: string; className?: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    let alive = true;
+    api
+      .get<{ id: string; dataUrl: string }>(`/api/attachments/${attId}`)
+      .then((r) => {
+        if (alive) setSrc(r.dataUrl);
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [attId]);
+  if (!src) return <div className={`${className} animate-pulse bg-muted`} />;
+  return <img src={src} alt={fileName} className={className} />;
+}
+
 function DebtCard({ debt }: { debt: Debt }) {
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -404,7 +423,7 @@ function DebtCard({ debt }: { debt: Debt }) {
                 onClick={() => setViewImg(att)}
                 className="group relative h-16 w-16 overflow-hidden rounded-lg border transition hover:ring-2 hover:ring-emerald-500"
               >
-                <img src={`/api/attachments/${att.id}`} alt={att.fileName} className="h-full w-full object-cover" loading="lazy" />
+                <AttImg attId={att.id} fileName={att.fileName} className="h-full w-full object-cover" />
               </button>
             ))}
           </div>
@@ -443,7 +462,7 @@ function DebtCard({ debt }: { debt: Debt }) {
           </DialogHeader>
           {viewImg && (
             <div className="relative">
-              <img src={`/api/attachments/${viewImg.id}`} alt={viewImg.fileName} className="max-h-[65vh] w-full rounded-lg object-contain" />
+              <AttImg attId={viewImg.id} fileName={viewImg.fileName} className="max-h-[65vh] w-full rounded-lg object-contain" />
               <Button
                 variant="destructive"
                 size="sm"

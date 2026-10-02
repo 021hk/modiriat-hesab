@@ -96,23 +96,24 @@ export interface Stats {
   totals: { income: number; expense: number };
 }
 
-// کلاینت HTTP
+// کلاینت — حالا کاملاً محلی (IndexedDB روی خود دستگاه)؛ همین رابط در نسخه سرور هم بود
+import { localRequest } from "@/lib/local-api";
+
 async function request<T>(url: string, options?: RequestInit): Promise<T> {
-  const res = await fetch(url, {
-    headers: { "Content-Type": "application/json" },
-    ...options,
-  });
-  if (!res.ok) {
-    let msg = "خطای شبکه";
+  const method = (options?.method || "GET").toUpperCase();
+  let body: unknown;
+  if (options?.body) {
     try {
-      const j = await res.json();
-      msg = j.error || msg;
+      body = JSON.parse(String(options.body));
     } catch {
-      // ignore
+      body = options.body;
     }
-    throw new Error(msg);
   }
-  return res.json();
+  try {
+    return await localRequest<T>(method, url, body);
+  } catch (e) {
+    throw e instanceof Error ? e : new Error("خطای غیرمنتظره");
+  }
 }
 
 export const api = {

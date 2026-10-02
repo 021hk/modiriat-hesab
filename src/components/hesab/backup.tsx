@@ -19,7 +19,17 @@ export function Backup() {
 
   const exportMutation = useMutation({
     mutationFn: async () => {
-      window.location.href = "/api/backup";
+      // خروجی از دیتابیس محلی و دانلود به‌صورت فایل JSON
+      const backup = await api.get<Record<string, unknown>>("/api/backup");
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `hesab-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 5000);
     },
   });
 

@@ -1,8 +1,9 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
-  output: "standalone",
-  /* config options here */
+  // خروجی کاملاً استاتیک — برنامه به‌صورت آفلاین روی گوشی (APK) و وب اجرا می‌شود
+  output: "export",
+  images: { unoptimized: true },
   typescript: {
     ignoreBuildErrors: true,
   },

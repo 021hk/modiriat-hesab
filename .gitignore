@@ -58,3 +58,11 @@ db/
 Caddyfile
 worklog.md
 agent-ctx/
+# android build artifacts + sdk (tools only, sources are tracked)
+.android-sdk/
+android/app/build/
+android/build/
+android/.gradle/
+android/app/src/main/assets/public/
+assets/generated/
+*.keystore
