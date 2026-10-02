@@ -56,3 +56,23 @@ Stage Summary:
 - لینک دانلود رسمی: https://github.com/021hk/modiriat-hesab/releases/download/v2.2.0/hesab-yar-v2.2.0.apk
 - صفحه Release: https://github.com/021hk/modiriat-hesab/releases/tag/v2.2.0
 - از این پس هر تغییر در main → CI خودکار APK می‌سازد و artifact می‌دهد؛ تگ v* → مستقیم به Release اضافه می‌شود
+
+---
+Task ID: 8
+Agent: Main Agent (Super Z)
+Task: v2.3.0 — فیلتر شماره فرستنده پیامک + تفکیک چند حساب در یک شماره
+
+Work Log:
+- درخواست کاربر: «نباید همه پیامک‌ها چک شود، فقط شماره‌ای که داده می‌شود» + «از یک شماره چند حساب می‌آید که باید تفکیک شوند با خط شماره حساب نقطه‌دار»
+- ماژول جدید src/lib/sms-match.ts (خالص و قابل‌تست): digitsOnly، normalizeSender، parseConfiguredSenders، senderMatches (معادل‌سازی کد کشور +98/صفر)، matchAccountByRef (تطبیق سخت‌گیرانه با ارقام شناسه/شبا/۴ رقم آخر)
+- BankAccount فیلد smsSender گرفت (کاما-جدا برای چند شماره) + create/update در local-api + اینپوت در فرم حساب با راهنما + نشانگر روی کارت حساب + بنر هشدار کهربایی اگر حسابی شماره فرستنده ندارد
+- sms-sync v3: reason جدید no_senders (بدون شماره تنظیم‌شده هیچ پیامکی خوانده نمی‌شود)؛ فقط فرستنده‌های تنظیم‌شده؛ پیامک دارای شناسه که با هیچ حسابی نخواند → skippedForeign (حساب دیگر) — تله‌پوش قدیمی تطبیق با نام بانک حذف شد؛ بدون شناسه فقط وقتی دقیقاً یک حساب آن بانک باشد قطعی، وگرنه صف
+- پارسر: accountRefDigits (ارقام کامل شناسه) + الگوی «حساب/کارت ...» با گارد ضد-مبلغ (واحد پول بعدش = مبلغ است؛ طول/گروه ناکافی = رد) — باگ کارت‌به‌کارت 2,000,000 گرفته شد
+- تست‌ها: 65/65 (شامل سناریوی ۲ حساب هم‌بانک + رد پیامک حساب غریبه + شبا)
+- CI: شکست بیلد تگ با 403 «Resource not accessible by integration» → permissions: contents:write به workflow اضافه شد → تگ force-repush شد → سبز
+- Release v2.3.0 با APK (4.1MB، versionCode 5) + توضیحات فارسی کامل منتشر شد (اسکریپت scripts/update-release-v230.sh)
+- توجه: .android-sdk/ در ریست سندباکس پاک شده — بیلد محلی فعلاً ممکن نیست، CI مسیر اصلی بیلد است (keystore در گیت هست)
+
+Stage Summary:
+- لینک: https://github.com/021hk/modiriat-hesab/releases/download/v2.3.0/hesab-yar-v2.3.0.apk
+- از این پس خواندن خودکار پیامک = فقط شماره‌های تنظیم‌شده + تفکیک حساب با خط شناسه نقطه‌دار
