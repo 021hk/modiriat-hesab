@@ -1,0 +1,21 @@
+{
+  "/_global-error/page": "app/_global-error/page.js",
+  "/_not-found/page": "app/_not-found/page.js",
+  "/api/attachments/[id]/route": "app/api/attachments/[id]/route.js",
+  "/api/backup/route": "app/api/backup/route.js",
+  "/api/bank-accounts/[id]/route": "app/api/bank-accounts/[id]/route.js",
+  "/api/bank-accounts/route": "app/api/bank-accounts/route.js",
+  "/api/categories/[id]/route": "app/api/categories/[id]/route.js",
+  "/api/categories/route": "app/api/categories/route.js",
+  "/api/debts/[id]/attachments/route": "app/api/debts/[id]/attachments/route.js",
+  "/api/debts/[id]/route": "app/api/debts/[id]/route.js",
+  "/api/debts/route": "app/api/debts/route.js",
+  "/api/route": "app/api/route.js",
+  "/api/sms/[id]/route": "app/api/sms/[id]/route.js",
+  "/api/sms/parse/route": "app/api/sms/parse/route.js",
+  "/api/sms/route": "app/api/sms/route.js",
+  "/api/stats/route": "app/api/stats/route.js",
+  "/api/transactions/[id]/route": "app/api/transactions/[id]/route.js",
+  "/api/transactions/route": "app/api/transactions/route.js",
+  "/page": "app/page.js"
+}

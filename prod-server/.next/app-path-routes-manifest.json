@@ -1,0 +1,21 @@
+{
+  "/_global-error/page": "/_global-error",
+  "/_not-found/page": "/_not-found",
+  "/api/attachments/[id]/route": "/api/attachments/[id]",
+  "/api/backup/route": "/api/backup",
+  "/api/bank-accounts/[id]/route": "/api/bank-accounts/[id]",
+  "/api/bank-accounts/route": "/api/bank-accounts",
+  "/api/categories/[id]/route": "/api/categories/[id]",
+  "/api/categories/route": "/api/categories",
+  "/api/debts/[id]/attachments/route": "/api/debts/[id]/attachments",
+  "/api/debts/[id]/route": "/api/debts/[id]",
+  "/api/debts/route": "/api/debts",
+  "/api/route": "/api",
+  "/api/sms/[id]/route": "/api/sms/[id]",
+  "/api/sms/parse/route": "/api/sms/parse",
+  "/api/sms/route": "/api/sms",
+  "/api/stats/route": "/api/stats",
+  "/api/transactions/[id]/route": "/api/transactions/[id]",
+  "/api/transactions/route": "/api/transactions",
+  "/page": "/"
+}

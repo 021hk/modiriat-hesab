@@ -1,0 +1,38 @@
+{
+  "name": "حساب‌یار - مدیریت حساب",
+  "short_name": "حساب‌یار",
+  "description": "نرم‌افزار مدیریت حساب، هزینه، بدهکاران و طلبکاران با اتصال پیامک بانکی",
+  "start_url": "/",
+  "display": "standalone",
+  "orientation": "portrait",
+  "dir": "rtl",
+  "lang": "fa-IR",
+  "background_color": "#f0fdf4",
+  "theme_color": "#059669",
+  "icons": [
+    {
+      "src": "/icon-192.png",
+      "sizes": "192x192",
+      "type": "image/png",
+      "purpose": "any maskable"
+    },
+    {
+      "src": "/icon-512.png",
+      "sizes": "512x512",
+      "type": "image/png",
+      "purpose": "any maskable"
+    }
+  ],
+  "shortcuts": [
+    {
+      "name": "تراکنش جدید",
+      "url": "/?tab=transactions",
+      "description": "ثبت هزینه یا درآمد جدید"
+    },
+    {
+      "name": "بدهکاران و طلبکاران",
+      "url": "/?tab=debts",
+      "description": "مدیریت بدهی‌ها"
+    }
+  ]
+}
