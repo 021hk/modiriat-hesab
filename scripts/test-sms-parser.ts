@@ -145,6 +145,13 @@ check("فرستنده: ۸ رقمی با کد کشور", senderMatches("+98500054
 check("فرستنده: نام لاتین", senderMatches("BPMELLAT", ["bpmellat"]), true);
 check("فرستنده: ناشناس رد", senderMatches("7777", ["9999"]), false);
 
+// v2.5.0 — باگ ارقام فارسی: کاربر با کیبورد فارسی «۵۰۰۰۱۴۲» تایپ می‌کند ولی اندروید «+985000142» می‌دهد
+check("normalizeSender: ارقام فارسی", normalizeSender("۵۰۰۰۱۴۲"), "5000142");
+check("normalizeSender: ارقام عربی", normalizeSender("٠٩١٢٣"), "09123");
+check("فرستنده: تنظیم با ارقام فارسی = پیامک لاتین", senderMatches("+985000142", ["۵۰۰۰۱۴۲"]), true);
+check("فرستنده: تنظیم با ارقام فارسی + کد کشور", senderMatches("985000142", ["۵۰۰۰۱۴۲"]), true);
+check("فرستنده: ارقام فارسی در لیست چند شماره", senderMatches("5000142", ["۹۹۹۹", "۵۰۰۰۱۴۲"]), true);
+
 // پیامک خودمان (شماره حساب داخلش با حساب ۱ می‌خواند) → پذیرفته شود
 const myRef = parseBankSms("777.888.13972872.1\n-473,000\n07/10_02:10\nمانده: 66,663,400");
 check("تفکیک: پیامک حساب خودم → حساب ۱", matchAccountByRef(myAccounts, myRef.accountRefDigits, myRef.cardTail), "acc-1");
@@ -162,6 +169,20 @@ check("تفکیک: بدون شناسه → رد/صف", matchAccountByRef(myAccou
 // شبا هم تطبیق داده می‌شود
 const ibanAccounts = [{ id: "acc-3", cardNumber: null, accountNumber: null, iban: "IR120570028280101723123123" }];
 check("تفکیک: تطبیق با شبا", matchAccountByRef(ibanAccounts, "0570028280101723123123", null), "acc-3");
+
+// ─── v2.5.0 — judgeSms: حکم نهایی همگام‌سازی (برای ابزار عیب‌یابی) ───
+import { judgeSms } from "../src/lib/sms-sync";
+const judgeAccounts = [
+  { id: "acc-1", bankName: "ملت", cardNumber: "6104-3379-1234-2872", accountNumber: "77788813972872", iban: null, smsSender: "9999" },
+  { id: "acc-2", bankName: "سامان", cardNumber: null, accountNumber: "333444555666", iban: null, smsSender: "۵۰۰۰۱۴۲" },
+] as never[];
+
+check("حکم: شماره ناهمسان", judgeSms({ sender: "7777", text: "برداشت 100,000 ریال", accounts: judgeAccounts, autoImport: true }).verdict, "rejected_sender");
+check("حکم: حساب غریبه", judgeSms({ sender: "+989999", text: "555.666.11112233.9\n-900,000\nمانده: 12,000,000", accounts: judgeAccounts, autoImport: true }).verdict, "rejected_foreign");
+check("حکم: خودکار ثبت (شماره حساب می‌خواند)", judgeSms({ sender: "9999", text: "777.888.13972872.1\n-473,000\nمانده: 66,663,400", accounts: judgeAccounts, autoImport: true }).verdict, "auto_import");
+check("حکم: مبلغ تشخیص نشد → صف", judgeSms({ sender: "9999", text: "پیامک آزمایشی بانک ملت بدون مبلغ", accounts: judgeAccounts, autoImport: true }).verdict, "queued_no_amount");
+check("حکم: ارقام فارسی فرستنده می‌خواند", judgeSms({ sender: "+985000142", text: "واریز 1,500,000 ریال به حساب 333444555666", accounts: judgeAccounts, autoImport: true }).verdict, "auto_import");
+check("حکم: رمز یکبارمصرف → junk", judgeSms({ sender: "9999", text: "رمز یکبار مصرف شما: 12345", accounts: judgeAccounts, autoImport: true }).verdict, "rejected_junk");
 
 console.log(`\nنتیجه: ${pass} موفق، ${failCount} ناموفق`);
 if (failCount > 0) process.exit(1);

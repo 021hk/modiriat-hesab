@@ -12,7 +12,7 @@ import {
   type CurrencyUnit,
 } from "@/lib/format";
 
-const APP_VERSION = "۲.۴.۰";
+const APP_VERSION = "۲.۵.۰";
 
 function ThemeSection() {
   const { theme, setTheme } = useTheme();

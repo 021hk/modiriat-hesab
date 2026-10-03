@@ -53,9 +53,55 @@ const JUNK_PATTERNS = [
   "t.me",
 ];
 
-function isJunk(text: string): boolean {
+export function isJunk(text: string): boolean {
   const lower = text.toLowerCase();
   return JUNK_PATTERNS.some((p) => lower.includes(p));
+}
+
+// متن پیامک به کدام دسته همگام‌سازی می‌رود — برای ابزار عیب‌یابی
+export type SmsSyncVerdict =
+  | "rejected_sender" // شماره فرستنده ناهمسان/تنظیم‌نشده
+  | "rejected_junk" // تبلیغاتی/رمز یکبارمصرف
+  | "rejected_foreign" // حساب غریبه
+  | "queued_no_amount" // مبلغ تشخیص نشد → صف
+  | "queued_unsure" // نوع نامطمئن یا ثبت خودکار خاموش → صف
+  | "auto_import"; // خودکار ثبت می‌شود
+
+export function judgeSms(params: {
+  sender: string;
+  text: string;
+  accounts: BankAccount[];
+  autoImport: boolean;
+}): { verdict: SmsSyncVerdict; accountId: string | null; explanation: string } {
+  const { sender, text, accounts, autoImport } = params;
+  const configuredSenders = accounts.flatMap((a) => parseConfiguredSenders(a.smsSender));
+  if (configuredSenders.length === 0) {
+    return { verdict: "rejected_sender", accountId: null, explanation: "هیچ شماره فرستنده‌ای روی حساب‌ها تنظیم نشده است" };
+  }
+  if (!senderMatches(sender, configuredSenders)) {
+    return { verdict: "rejected_sender", accountId: null, explanation: "شماره فرستنده پیامک با شماره‌های تنظیم‌شده نمی‌خواند" };
+  }
+  const t = text.trim();
+  if (!t || isJunk(t)) {
+    return { verdict: "rejected_junk", accountId: null, explanation: "پیامک تبلیغاتی/کد یکبارمصرف تشخیص داده شد" };
+  }
+  const parsed = parseBankSms(t);
+  let accountId: string | null = null;
+  if (parsed.accountRefDigits || parsed.cardTail) {
+    accountId = matchAccountByRef(accounts, parsed.accountRefDigits, parsed.cardTail);
+    if (!accountId) {
+      return { verdict: "rejected_foreign", accountId: null, explanation: "شناسه حساب/کارت داخل پیامک با هیچ‌کدام از حساب‌های شما نمی‌خواند" };
+    }
+  } else {
+    accountId = matchAccountWithoutRef(accounts, parsed.bankName);
+  }
+  if (!parsed.amount || parsed.amount <= 0) {
+    return { verdict: "queued_no_amount", accountId, explanation: "مبلغ تشخیص داده نشد — در صف بررسی می‌آید (ثبت دستی مبلغ)" };
+  }
+  if (autoImport && parsed.confidence >= AUTO_CONFIDENCE && (parsed.type === "income" || parsed.type === "expense")) {
+    return { verdict: "auto_import", accountId, explanation: "خودکار ثبت می‌شود" };
+  }
+  return { verdict: "queued_unsure", accountId, explanation: autoImport ? "نوع تراکنش نامطمئن است — در صف بررسی می‌آید" : "ثبت خودکار خاموش است — در صف بررسی می‌آید" };
 }
 
 // تطبیق نام بانک/کارت پارس‌شده با حساب‌های ثبت‌شده کاربر — فقط وقتی پیامک اصلاً شناسه حساب/کارت ندارد

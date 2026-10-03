@@ -16,11 +16,20 @@ export function digitsOnly(s: string | null | undefined): string {
     .replace(/\D/g, "");
 }
 
-// نرمال‌سازی شماره فرستنده: حروف کوچک، بدون +/فاصله/خط تیره
+// نرمال‌سازی شماره فرستنده: حروف کوچک، تبدیل ارقام فارسی/عربی به لاتین، بدون +/فاصله/خط تیره
+// ⚠️ تبدیل ارقام حیاتی است: کیبورد فارسی «۵۰۰۰۱۴۲» تایپ می‌کند ولی اندروید «5000142» می‌دهد
+const FA_DIGITS = "۰۱۲۳۴۵۶۷۸۹";
+const AR_DIGITS = "٠١٢٣٤٥٦٧٨٩";
+
 export function normalizeSender(s: string | null | undefined): string {
   return String(s || "")
     .trim()
     .toLowerCase()
+    .replace(/[۰-۹٠-٩]/g, (d) => {
+      const fi = FA_DIGITS.indexOf(d);
+      if (fi > -1) return String(fi);
+      return String(AR_DIGITS.indexOf(d));
+    })
     .replace(/[+\s\-()]/g, "");
 }
 

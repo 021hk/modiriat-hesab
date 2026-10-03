@@ -39,6 +39,8 @@ import {
   Landmark,
   Wallet,
   MessageSquareText,
+  MessagesSquare,
+  Stethoscope,
   Inbox,
   Download,
   CheckCheck,
@@ -48,6 +50,7 @@ import {
   ShieldCheck,
   ShieldAlert,
   RefreshCw,
+  Loader2,
 } from "lucide-react";
 import { api, type BankAccount, type SmsLog, type Transaction } from "@/lib/client-api";
 import {
@@ -64,9 +67,13 @@ import {
   isNativeAndroid,
   getSmsPermission,
   requestSmsPermission,
+  readInboxSince,
   type SmsPermState,
+  type NativeSms,
 } from "@/lib/native-sms";
-import { syncBankSms, getLastSmsSync } from "@/lib/sms-sync";
+import { syncBankSms, getLastSmsSync, judgeSms, type SmsSyncResult, type SmsSyncVerdict } from "@/lib/sms-sync";
+import { parseConfiguredSenders, senderMatches, normalizeSender } from "@/lib/sms-match";
+import { parseBankSms } from "@/lib/sms-parser";
 import { getMeta, setMeta } from "@/lib/local-db";
 import type { PluginListenerHandle } from "@capacitor/core";
 
@@ -273,8 +280,305 @@ const toFa = (n: number) => {
   }
 };
 
+// ─── کشف شماره‌های فرستنده واقعی روی گوشی ───
+// کاربر معمولاً شماره فرستنده پیامک بانکش را نمی‌داند؛ این دیالوگ صندوق ورودی را می‌خواند،
+// پیامک‌ها را بر اساس فرستنده گروه می‌کند و با یک لمس می‌توان شماره را به حساب وصل کرد.
+interface SenderGroup {
+  raw: string; // نمونه اصلی فرستنده (پرتکرارترین شکل)
+  norm: string; // شکل نرمال‌شده برای گروه‌بندی
+  count: number;
+  latestBody: string;
+  latestDate: number;
+}
+
+function groupInboxBySender(messages: NativeSms[]): SenderGroup[] {
+  const map = new Map<string, SenderGroup>();
+  for (const m of messages) {
+    const raw = String(m.sender || "").trim();
+    if (!raw) continue;
+    const norm = normalizeSender(raw);
+    if (!norm) continue;
+    const cur = map.get(norm);
+    if (cur) {
+      cur.count++;
+      if (m.date > cur.latestDate) {
+        cur.latestDate = m.date;
+        cur.latestBody = m.body || "";
+        if (raw.length >= cur.raw.length) cur.raw = raw;
+      }
+    } else {
+      map.set(norm, { raw, norm, count: 1, latestBody: m.body || "", latestDate: m.date });
+    }
+  }
+  return [...map.values()].sort((a, b) => b.count - a.count);
+}
+
+function SenderPickerDialog({
+  open,
+  onOpenChange,
+  accounts,
+}: {
+  open: boolean;
+  onOpenChange: (v: boolean) => void;
+  accounts: BankAccount[];
+}) {
+  const { toast } = useToast();
+  const qc = useQueryClient();
+  const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [groups, setGroups] = useState<SenderGroup[]>([]);
+  const [attachFor, setAttachFor] = useState<string | null>(null); // norm شماره‌ای که انتخاب حساب برایش باز است
+  const [pickedAccount, setPickedAccount] = useState("");
+
+  const configured = accounts.flatMap((a) => parseConfiguredSenders(a.smsSender));
+
+  const loadInbox = useCallback(async () => {
+    setLoading(true);
+    setLoadError(null);
+    try {
+      const since = Date.now() - 30 * 24 * 60 * 60 * 1000;
+      const msgs = await readInboxSince(since, 500);
+      setGroups(groupInboxBySender(msgs));
+    } catch (e) {
+      setLoadError(String(e));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (open && isNativeAndroid()) void loadInbox();
+    if (!open) {
+      setAttachFor(null);
+      setPickedAccount("");
+    }
+  }, [open, loadInbox]);
+
+  const attachMutation = useMutation({
+    mutationFn: async ({ accountId, sender }: { accountId: string; sender: string }) => {
+      const acc = accounts.find((a) => a.id === accountId);
+      if (!acc) throw new Error("حساب پیدا نشد");
+      const list = parseConfiguredSenders(acc.smsSender);
+      if (!list.some((s) => normalizeSender(s) === normalizeSender(sender))) list.push(sender);
+      return api.put(`/api/bank-accounts/${accountId}`, { smsSender: list.join(",") });
+    },
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["bank-accounts"] });
+      toast({ title: "شماره فرستنده به حساب اضافه شد — حالا پیامک‌های همان شماره خوانده می‌شود" });
+      setAttachFor(null);
+      setPickedAccount("");
+    },
+    onError: (e: Error) => toast({ title: "خطا", description: e.message, variant: "destructive" }),
+  });
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-lg" dir="rtl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <MessagesSquare className="h-5 w-5 text-emerald-700" />
+            شماره‌های فرستنده پیامک روی گوشی
+          </DialogTitle>
+        </DialogHeader>
+        <p className="text-xs leading-5 text-muted-foreground">
+          این فهرست، فرستنده‌های واقعی پیامک‌های ۳۰ روز اخیر گوشی شماست. اگر شماره‌ای که بانک‌تان با آن پیامک می‌دهد در این لیست نیست و «تنظیم شده» هم نیست، روی «افزودن به حساب» بزنید تا پیامک‌های همان شماره خوانده شود.
+        </p>
+        {loading ? (
+          <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
+            <Loader2 className="h-5 w-5 animate-spin" /> در حال خواندن صندوق پیامک...
+          </div>
+        ) : loadError ? (
+          <div className="space-y-2 py-4 text-center">
+            <p className="text-sm text-red-600">خطا در خواندن پیامک‌ها</p>
+            <p className="text-xs text-muted-foreground">دسترسی پیامک باید فعال باشد</p>
+            <Button size="sm" variant="outline" onClick={() => void loadInbox()}>تلاش دوباره</Button>
+          </div>
+        ) : groups.length === 0 ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">پیامکی در ۳۰ روز اخیر پیدا نشد</p>
+        ) : (
+          <div className="max-h-[50vh] space-y-1.5 overflow-y-auto">
+            {groups.slice(0, 50).map((g) => {
+              const isConfigured = senderMatches(g.raw, configured);
+              const isPersonal = /^(\+?98|0)?9\d{9}$/.test(g.raw.replace(/\s/g, "")) && g.raw.replace(/\D/g, "").length === 11;
+              return (
+                <div key={g.norm} className="rounded-xl border p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span dir="ltr" className="shrink-0 font-bold">{g.raw}</span>
+                      <Badge variant="secondary" className="shrink-0">{toFa(g.count)} پیامک</Badge>
+                      {isPersonal && <span className="shrink-0 text-[10px] text-muted-foreground">(شخصی)</span>}
+                    </div>
+                    {isConfigured ? (
+                      <Badge className="shrink-0 bg-emerald-100 text-emerald-800 hover:bg-emerald-100 dark:bg-emerald-900/50 dark:text-emerald-300">
+                        <CheckCheck className="ml-1 h-3 w-3" /> تنظیم شده
+                      </Badge>
+                    ) : attachFor === g.norm ? (
+                      <div className="flex shrink-0 items-center gap-1">
+                        <Select value={pickedAccount} onValueChange={setPickedAccount}>
+                          <SelectTrigger className="h-8 w-[130px] text-xs">
+                            <SelectValue placeholder="انتخاب حساب" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {accounts.map((a) => (
+                              <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        <Button
+                          size="sm"
+                          className="h-8 bg-emerald-700 px-2 text-xs hover:bg-emerald-800"
+                          disabled={!pickedAccount || attachMutation.isPending}
+                          onClick={() => attachMutation.mutate({ accountId: pickedAccount, sender: g.raw })}
+                        >
+                          ثبت
+                        </Button>
+                        <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={() => { setAttachFor(null); setPickedAccount(""); }}>
+                          انصراف
+                        </Button>
+                      </div>
+                    ) : (
+                      <Button size="sm" variant="outline" className="h-8 shrink-0 text-xs" onClick={() => setAttachFor(g.norm)}>
+                        <Plus className="ml-1 h-3 w-3" /> افزودن به حساب
+                      </Button>
+                    )}
+                  </div>
+                  {g.latestBody && (
+                    <p className="mt-1.5 line-clamp-1 text-[11px] leading-4 text-muted-foreground" dir="rtl">
+                      {g.latestBody}
+                    </p>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="outline" onClick={() => onOpenChange(false)}>بستن</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+// ─── عیب‌یابی پیامک: شماره فرستنده + متن پیامک → نتیجه کامل تشخیص ───
+const VERDICT_META: Record<SmsSyncVerdict, { label: string; cls: string }> = {
+  auto_import: { label: "خودکار ثبت می‌شود ✓", cls: "bg-emerald-50 text-emerald-800 border-emerald-300 dark:bg-emerald-950/40 dark:text-emerald-300 dark:border-emerald-700" },
+  queued_no_amount: { label: "در صف بررسی می‌آید", cls: "bg-amber-50 text-amber-900 border-amber-300 dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-700" },
+  queued_unsure: { label: "در صف بررسی می‌آید", cls: "bg-amber-50 text-amber-900 border-amber-300 dark:bg-amber-950/40 dark:text-amber-200 dark:border-amber-700" },
+  rejected_sender: { label: "رد می‌شود — شماره فرستنده ناهمسان", cls: "bg-red-50 text-red-800 border-red-300 dark:bg-red-950/40 dark:text-red-300 dark:border-red-700" },
+  rejected_junk: { label: "رد می‌شود — تبلیغاتی/رمز", cls: "bg-red-50 text-red-800 border-red-300 dark:bg-red-950/40 dark:text-red-300 dark:border-red-700" },
+  rejected_foreign: { label: "رد می‌شود — حساب دیگری است", cls: "bg-red-50 text-red-800 border-red-300 dark:bg-red-950/40 dark:text-red-300 dark:border-red-700" },
+};
+
+function SmsDiagnostic({ accounts }: { accounts: BankAccount[] }) {
+  const [sender, setSender] = useState("");
+  const [text, setText] = useState("");
+  const [result, setResult] = useState<null | {
+    verdict: SmsSyncVerdict;
+    accountId: string | null;
+    explanation: string;
+    parsed: { type: string; amount: number | null; bankName: string | null; accountRef: string | null };
+    senderOk: boolean | null;
+  }>(null);
+
+  const analyze = () => {
+    const t = text.trim();
+    if (!t) return;
+    const j = judgeSms({ sender: sender.trim(), text: t, accounts, autoImport: true });
+    const senderOk = j.verdict === "rejected_sender"
+      ? false
+      : senderMatches(sender.trim(), accounts.flatMap((a) => parseConfiguredSenders(a.smsSender)));
+    const p = j.verdict === "rejected_sender" || j.verdict === "rejected_junk" ? null : parseBankSms(t);
+    setResult({
+      verdict: j.verdict,
+      accountId: j.accountId,
+      explanation: j.explanation,
+      parsed: {
+        type: p?.type || "نامشخص",
+        amount: p?.amount ?? null,
+        bankName: p?.bankName || null,
+        accountRef: p?.accountRefDigits || p?.cardTail || null,
+      },
+      senderOk,
+    });
+  };
+
+  const vm = result ? VERDICT_META[result.verdict] : null;
+  const accName = result?.accountId ? accounts.find((a) => a.id === result.accountId)?.name : null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Stethoscope className="h-4 w-4 text-emerald-700" />
+          عیب‌یابی پیامک — چرا شناسایی نشد؟
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-xs leading-5 text-muted-foreground">
+          شماره فرستنده و متن دقیق پیامک را اینجا بچسبانید تا ببینید برنامه با آن چه می‌کند و اگر شناسایی نمی‌شود، دقیقاً کجا رد می‌شود.
+        </p>
+        <div className="grid gap-2">
+          <Input
+            dir="ltr"
+            className="text-left"
+            placeholder="شماره فرستنده (مثلاً +9850004271 یا 9999)"
+            value={sender}
+            onChange={(e) => setSender(e.target.value)}
+          />
+          <textarea
+            dir="rtl"
+            rows={3}
+            className="w-full rounded-xl border bg-background p-3 text-sm outline-none focus:ring-2 focus:ring-[rgba(5,150,105,0.4)]"
+            placeholder="متن کامل پیامک بانک را همین‌جا بچسبانید..."
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+          />
+          <Button onClick={analyze} disabled={!text.trim()} className="bg-emerald-700 hover:bg-emerald-800">
+            <Stethoscope className="ml-1 h-4 w-4" /> بررسی کن
+          </Button>
+        </div>
+        {result && vm && (
+          <div className="space-y-2">
+            <div className={`rounded-xl border p-3 text-sm font-medium ${vm.cls}`}>
+              {vm.label}
+              <div className="mt-1 text-xs font-normal leading-5">{result.explanation}</div>
+            </div>
+            <div className="grid grid-cols-2 gap-2 rounded-xl border bg-muted/50 p-3 text-xs sm:grid-cols-4">
+              <div>
+                <div className="text-muted-foreground">شماره فرستنده</div>
+                <div className={result.senderOk === false ? "font-bold text-red-600" : "font-bold text-emerald-700"}>
+                  {result.senderOk === false ? "ناهمسان ✗" : result.senderOk ? "تأیید ✓" : "—"}
+                </div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">نوع</div>
+                <div className="font-bold">{result.parsed.type === "income" ? "واریز ↑" : result.parsed.type === "expense" ? "برداشت ↓" : "نامشخص"}</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">مبلغ</div>
+                <div className="font-bold tabular-nums-persian">{result.parsed.amount ? formatMoneyU(result.parsed.amount) : "تشخیص نشد"}</div>
+              </div>
+              <div>
+                <div className="text-muted-foreground">بانک / شناسه</div>
+                <div className="font-bold">{result.parsed.bankName || "—"}{result.parsed.accountRef ? ` • ${result.parsed.accountRef}` : ""}</div>
+              </div>
+              {accName && (
+                <div className="col-span-2 sm:col-span-4">
+                  <div className="text-muted-foreground">حساب تطبیق‌شده</div>
+                  <div className="font-bold text-emerald-700">{accName}</div>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 // ─── خواندن خودکار پیامک‌های بانکی (فقط اندروید) ───
-function SmsAutoSync() {
+function SmsAutoSync({ accounts }: { accounts: BankAccount[] }) {
   const { toast } = useToast();
   const qc = useQueryClient();
   const [mounted, setMounted] = useState(false);
@@ -282,6 +586,8 @@ function SmsAutoSync() {
   const [syncing, setSyncing] = useState(false);
   const [lastSync, setLastSync] = useState(0);
   const [autoImport, setAutoImport] = useState(true);
+  const [lastResult, setLastResult] = useState<SmsSyncResult | null>(null);
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   const syncingRef = useRef(false);
   const optsRef = useRef({ autoImport: true });
@@ -296,6 +602,7 @@ function SmsAutoSync() {
       setSyncing(true);
       try {
         const res = await syncBankSms({ ...optsRef.current });
+        setLastResult(res);
         setLastSync(await getLastSmsSync());
         qc.invalidateQueries({ queryKey: ["sms-logs"] });
         qc.invalidateQueries({ queryKey: ["transactions"] });
@@ -305,6 +612,7 @@ function SmsAutoSync() {
           if (res.imported > 0) parts.push(`${toFa(res.imported)} تراکنش خودکار ثبت شد`);
           if (res.queued > 0) parts.push(`${toFa(res.queued)} پیامک در صف بررسی است`);
           if (res.skippedForeign > 0) parts.push(`${toFa(res.skippedForeign)} پیامک متعلق به حساب دیگری بود و نادیده گرفته شد`);
+          if (res.skippedSender > 0) parts.push(`${toFa(res.skippedSender)} پیامک از شماره‌های ناهمسان نادیده شد`);
           const desc = parts.length > 0 ? parts.join(" — ") : "پیامک بانکی جدیدی نبود";
           if (!silent || res.imported > 0 || res.queued > 0) {
             toast({ title: "پیامک‌ها بررسی شد", description: desc });
@@ -412,11 +720,29 @@ function SmsAutoSync() {
                 <ShieldCheck className="h-4 w-4 text-emerald-600" />
                 <span>دسترسی فعال — {lastSync > 0 ? `آخرین بررسی: ${new Date(lastSync).toLocaleString("fa-IR")}` : "هنوز بررسی نشده"}</span>
               </div>
-              <Button size="sm" variant="outline" className="h-7 text-xs" disabled={syncing} onClick={() => void runSync(false)}>
-                <RefreshCw className={`ml-1 h-3 w-3 ${syncing ? "animate-spin" : ""}`} />
-                {syncing ? "در حال بررسی..." : "بررسی الان"}
-              </Button>
+              <div className="flex shrink-0 gap-1.5">
+                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setPickerOpen(true)}>
+                  <MessagesSquare className="ml-1 h-3 w-3" />
+                  شماره‌های روی گوشی
+                </Button>
+                <Button size="sm" variant="outline" className="h-7 text-xs" disabled={syncing} onClick={() => void runSync(false)}>
+                  <RefreshCw className={`ml-1 h-3 w-3 ${syncing ? "animate-spin" : ""}`} />
+                  {syncing ? "در حال بررسی..." : "بررسی الان"}
+                </Button>
+              </div>
             </div>
+            {/* شفاف‌سازی: اگر پیامک‌هایی از شماره‌های ناهمسان رد شد، کاربر باید بداند */}
+            {lastResult?.ok && lastResult.bankCount === 0 && lastResult.skippedSender > 0 && (
+              <div className="flex items-start justify-between gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 dark:border-amber-500/40 dark:bg-amber-950/40">
+                <p className="text-xs leading-5 text-amber-900 dark:text-amber-200">
+                  {toFa(lastResult.skippedSender)} پیامک روی گوشی بود ولی شماره فرستنده‌اش با شماره‌های تنظیم‌شده نمی‌خواند —
+                  احتمالاً شماره فرستنده بانک چیز دیگری است.
+                </p>
+                <Button size="sm" variant="outline" className="h-7 shrink-0 text-xs" onClick={() => setPickerOpen(true)}>
+                  دیدن شماره‌ها
+                </Button>
+              </div>
+            )}
             <div className="flex items-center justify-between rounded-xl border p-3">
               <div className="pl-3">
                 <div className="text-sm font-medium">ثبت خودکار تراکنش‌ها</div>
@@ -435,6 +761,7 @@ function SmsAutoSync() {
           </>
         )}
       </CardContent>
+      {perm === "granted" && <SenderPickerDialog open={pickerOpen} onOpenChange={setPickerOpen} accounts={accounts} />}
     </Card>
   );
 }
@@ -504,7 +831,10 @@ function SmsSection({ accounts }: { accounts: BankAccount[] }) {
   return (
     <div className="space-y-4">
       {/* خواندن خودکار پیامک (فقط در اپ اندروید نمایش داده می‌شود) */}
-      <SmsAutoSync />
+      <SmsAutoSync accounts={accounts} />
+
+      {/* عیب‌یابی پیامک — چرا شناسایی نشد؟ */}
+      <SmsDiagnostic accounts={accounts} />
 
       {/* ورود پیامک */}
       <Card>
