@@ -1,5 +1,6 @@
 // تست پارسر پیامک بانکی — اجرا: bun scripts/test-sms-parser.ts
 import { parseBankSms, normalizeDigits } from "../src/lib/sms-parser";
+import { judgeSms, shouldApplySmsBalance } from "../src/lib/sms-sync";
 
 let pass = 0;
 let failCount = 0;
@@ -241,6 +242,32 @@ check("حکم: حساب غریبه با شناسه کامل → رد", jf.verdic
 // ۸) هشدار رگرسیون: مبلغ «1.500» بدون هزارگان نباید خراب شود
 check("مبلغ ساده 500,000", parseBankSms("برداشت 500,000 ریال").amount, 500000);
 check("مبلغ ۱۲ رقمی بدون جداکننده", parseBankSms("برداشت 123456789012 ریال").amount, 123456789012);
+
+// ─── v2.7.0 — به‌روزرسانی موجودی بانکی از «مانده» پیامک ───
+
+// ۱) shouldApplySmsBalance: فقط مانده جدیدتر اعمال شود
+check("مانده اولین بار → اعمال", shouldApplySmsBalance(null, 1000), true);
+check("مانده اولین بار (رشته خالی) → اعمال", shouldApplySmsBalance("", 1000), true);
+check("مانده با تاریخ نامعتبر → اعمال", shouldApplySmsBalance("not-a-date", 1000), true);
+check("پیامک قدیمی‌تر از مانده ثبت‌شده → رد", shouldApplySmsBalance("2026-10-05T10:00:00.000Z", Date.parse("2026-10-05T09:00:00.000Z")), false);
+check("پیامک جدیدتر → اعمال", shouldApplySmsBalance("2026-10-05T10:00:00.000Z", Date.parse("2026-10-05T11:00:00.000Z")), true);
+check("همان زمان → اعمال (آخرین پیامک حاکم)", shouldApplySmsBalance("2026-10-05T10:00:00.000Z", Date.parse("2026-10-05T10:00:00.000Z")), true);
+
+// ۲) پارس مانده با ارقام فارسی و جداکننده هزارگان فارسی (٬)
+const faBalance = parseBankSms("برداشت 100,000 ریال\nموجودی: ۱٬۲۳۴٬۵۶۷");
+check("مانده فارسی با ٬ → 1234567", faBalance.balance, 1234567);
+
+// ۳) پیامک فقط-مانده (مبلغ ندارد) → حکم صف، نه رد — و مانده برای به‌روزرسانی موجودی پارس می‌شود
+const balOnly = parseBankSms("حساب 1001234567\nمانده: 5,000,000 ریال");
+check("فقط مانده → موجودی", balOnly.balance, 5000000);
+check("فقط مانده → شناسه", balOnly.accountRefDigits, "1001234567");
+const jBal = judgeSms({
+  sender: "9999",
+  text: "حساب 1001234567\nمانده: 5,000,000 ریال",
+  accounts: [{ id: "a1", bankName: "ملی", cardNumber: null, accountNumber: "1001234567", iban: null, smsSender: "9999" }] as never[],
+  autoImport: true,
+});
+check("حکم: پیامک فقط-مانده → صف (بدون مبلغ تراکنش)", jBal.verdict, "queued_no_amount");
 
 console.log(`\nنتیجه: ${pass} موفق، ${failCount} ناموفق`);
 if (failCount > 0) process.exit(1);

@@ -150,10 +150,13 @@ export function parseBankSms(rawText: string): SmsParseResult {
       cands.push({ amount: toNumber(um[1]), index: um.index });
     }
     if (cands.length > 0) {
+      // اگر همه اعداد کنار ریال همان «مانده» هستند، پیامک اصلاً مبلغ تراکنش ندارد
+      // (قبلاً fallback به cands[0] مانده را مبلغ می‌گرفت — باگ ثبت اشتباه!)
       const nonBalance = balance != null ? cands.filter((c) => c.amount !== balance) : cands;
-      const chosen = nonBalance[0] || cands[0];
-      amount = chosen.amount;
-      amountIdx = chosen.index;
+      if (nonBalance.length > 0) {
+        amount = nonBalance[0].amount;
+        amountIdx = nonBalance[0].index;
+      }
     }
   }
 

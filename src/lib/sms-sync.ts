@@ -25,6 +25,19 @@ export interface SmsSyncResult {
   skipped: number; // غیر مرتبط (شخصی/تبلیغ/کد)
   skippedSender: number; // از شماره‌هایی که کاربر تنظیم نکرده — اصلاً خوانده نمی‌شوند
   skippedForeign: number; // پیامک حساب دیگری در همان شماره (شماره حساب داخلش با حساب‌های ما نمی‌خواند)
+  balanceUpdated: number; // موجودی بانکی چند حساب از «مانده» پیامک به‌روز شد
+}
+
+// آیا «مانده» این پیامک باید روی حساب اعمال شود؟
+// فقط وقتی پیامک از آخرین مانده ثبت‌شده جدیدتر باشد (پیامک قدیمی‌تر موجودی را عقب نمی‌برد)
+export function shouldApplySmsBalance(
+  prevDateIso: string | null | undefined,
+  msgDateMs: number
+): boolean {
+  if (!prevDateIso) return true;
+  const prevMs = Date.parse(prevDateIso);
+  if (!Number.isFinite(prevMs)) return true;
+  return msgDateMs >= prevMs;
 }
 
 // فرستنده شخصی (شماره موبایل/خط ثابت) ≠ فرستنده بانک (کد کوتاه یا نام لاتین)
@@ -155,7 +168,7 @@ export function syncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
 
 async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
   const autoImport = options?.autoImport !== false;
-  const empty = { total: 0, bankCount: 0, imported: 0, queued: 0, skipped: 0, skippedSender: 0, skippedForeign: 0 };
+  const empty = { total: 0, bankCount: 0, imported: 0, queued: 0, skipped: 0, skippedSender: 0, skippedForeign: 0, balanceUpdated: 0 };
 
   if (!isNativeAndroid()) return { ok: false, reason: "not_native", ...empty };
   const perm = await getSmsPermission();
@@ -199,6 +212,7 @@ async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
   let skipped = 0;
   let skippedSender = 0;
   let skippedForeign = 0;
+  let balanceUpdated = 0;
   let maxDate = since;
 
   for (const msg of sorted) {
@@ -256,12 +270,33 @@ async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
 
     bankCount++;
 
+    const dateIso = new Date(msg.date).toISOString();
+
+    // ─── به‌روزرسانی موجودی بانکی از «مانده» پیامک ───
+    // این همان چیزی است که کاربر می‌خواهد: موجودی حساب در برنامه = موجودی واقعی بانک
+    if (parsed.balance != null && accountId) {
+      let bal = parsed.balance;
+      if (parsed.unit === "toman") bal *= 10; // پیامک تومانی → ریال
+      const acc = accounts.find((a) => a.id === accountId);
+      // پیامک‌ها قدیمی→جدید پردازش می‌شوند؛ فقط ماندهٔ جدیدتر از آخرین مانده ثبت‌شده اعمال می‌شود
+      if (acc && bal >= 0 && shouldApplySmsBalance(acc.smsBalanceDate, msg.date)) {
+        try {
+          await api.put(`/api/bank-accounts/${accountId}`, {
+            smsBalance: bal,
+            smsBalanceDate: dateIso,
+          });
+          balanceUpdated++;
+        } catch {
+          // به‌روزرسانی موجودی نباید مسیر ثبت تراکنش را خراب کند
+        }
+      }
+    }
+
     // واحد پول: مبالغ همیشه به «ریال» ذخیره می‌شوند (نمایش بر اساس تنظیم کاربر تبدیل می‌شود)
     let finalAmount = parsed.amount && parsed.amount > 0 ? parsed.amount : null;
     // مبالغ همیشه به ریال ذخیره می‌شوند — پیامک تومانی باید ×۱۰ شود
     if (finalAmount && parsed.unit === "toman") finalAmount *= 10;
 
-    const dateIso = new Date(msg.date).toISOString();
     const baseLog = {
       id: newId(),
       rawText: text,
@@ -321,7 +356,7 @@ async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
   const newSyncPoint = Math.min(Math.max(maxDate, since), Date.now());
   if (newSyncPoint > since) await setMeta(LAST_SYNC_KEY, newSyncPoint);
 
-  return { ok: true, total: messages.length, bankCount, imported, queued, skipped, skippedSender, skippedForeign };
+  return { ok: true, total: messages.length, bankCount, imported, queued, skipped, skippedSender, skippedForeign, balanceUpdated };
 }
 
 // آخرین همگام‌سازی (برای نمایش)

@@ -46,6 +46,7 @@ import {
   CheckCheck,
   XCircle,
   Sparkles,
+  BadgeCheck,
   BellRing,
   ShieldCheck,
   ShieldAlert,
@@ -289,6 +290,7 @@ interface SenderGroup {
   count: number;
   latestBody: string;
   latestDate: number;
+  messages: NativeSms[]; // ۱۰ پیامک آخر (جدیدترین اول) — برای بررسی تک‌تک در دیالوگ
 }
 
 function groupInboxBySender(messages: NativeSms[]): SenderGroup[] {
@@ -307,8 +309,15 @@ function groupInboxBySender(messages: NativeSms[]): SenderGroup[] {
         if (raw.length >= cur.raw.length) cur.raw = raw;
       }
     } else {
-      map.set(norm, { raw, norm, count: 1, latestBody: m.body || "", latestDate: m.date });
+      map.set(norm, { raw, norm, count: 1, latestBody: m.body || "", latestDate: m.date, messages: [] });
     }
+  }
+  // ۱۰ پیامک آخر هر فرستنده (جدیدترین اول) برای نمایش حکم تک‌تک
+  for (const g of map.values()) {
+    g.messages = messages
+      .filter((m) => normalizeSender(String(m.sender || "").trim()) === g.norm)
+      .sort((a, b) => b.date - a.date)
+      .slice(0, 10);
   }
   return [...map.values()].sort((a, b) => b.count - a.count);
 }
@@ -329,6 +338,7 @@ function SenderPickerDialog({
   const [groups, setGroups] = useState<SenderGroup[]>([]);
   const [attachFor, setAttachFor] = useState<string | null>(null); // norm شماره‌ای که انتخاب حساب برایش باز است
   const [pickedAccount, setPickedAccount] = useState("");
+  const [expanded, setExpanded] = useState<string | null>(null); // norm گروهی که پیامک‌هایش تک‌تک بررسی می‌شود
 
   const configured = accounts.flatMap((a) => parseConfiguredSenders(a.smsSender));
 
@@ -447,6 +457,47 @@ function SenderPickerDialog({
                       {g.latestBody}
                     </p>
                   )}
+                  {/* بررسی تک‌تک پیامک‌های همین فرستنده — کاربر می‌بیند هر پیامک چه حکمی می‌گیرد */}
+                  <div className="mt-1.5">
+                    <button
+                      type="button"
+                      className="text-[11px] font-medium text-emerald-700 hover:underline dark:text-emerald-400"
+                      onClick={() => setExpanded(expanded === g.norm ? null : g.norm)}
+                    >
+                      {expanded === g.norm ? "بستن بررسی پیامک‌ها ▲" : "چرا ثبت نمی‌شود؟ بررسی تک‌تک پیامک‌ها ▼"}
+                    </button>
+                    {expanded === g.norm && (
+                      <div className="mt-2 space-y-1.5 border-t pt-2">
+                        {g.messages.map((m) => {
+                          const j = judgeSms({ sender: g.raw, text: (m.body || "").trim(), accounts, autoImport: true });
+                          const vmj = VERDICT_META[j.verdict];
+                          const p = (m.body || "").trim() ? parseBankSms(m.body.trim()) : null;
+                          return (
+                            <div key={m.id} className="rounded-lg border bg-muted/30 p-2">
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="shrink-0 text-[10px] text-muted-foreground">{new Date(m.date).toLocaleString("fa-IR")}</span>
+                                <span className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${vmj.cls}`}>{vmj.label}</span>
+                              </div>
+                              <p className="mt-1 line-clamp-2 text-[11px] leading-4" dir="rtl">{m.body}</p>
+                              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground">
+                                {p?.amount ? (
+                                  <span>
+                                    مبلغ: <span className="font-bold tabular-nums-persian">{formatMoneyU(p.unit === "toman" ? p.amount * 10 : p.amount)}</span>
+                                    {p.unit === "toman" ? " (تومان×۱۰)" : ""}
+                                  </span>
+                                ) : (
+                                  <span>مبلغ: تشخیص نشد</span>
+                                )}
+                                {p?.balance != null && <span>مانده: <span className="font-bold tabular-nums-persian">{formatMoneyU(p.balance)}</span></span>}
+                                {p?.type !== "unknown" && p && <span>{p.type === "income" ? "واریز ↑" : "برداشت ↓"}</span>}
+                                {j.accountId && <span>حساب: {accounts.find((a) => a.id === j.accountId)?.name || "?"}</span>}
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </div>
               );
             })}
@@ -610,6 +661,7 @@ function SmsAutoSync({ accounts }: { accounts: BankAccount[] }) {
         if (res.ok) {
           const parts: string[] = [];
           if (res.imported > 0) parts.push(`${toFa(res.imported)} تراکنش خودکار ثبت شد`);
+          if (res.balanceUpdated > 0) parts.push(`موجودی ${toFa(res.balanceUpdated)} حساب از پیامک بانک به‌روز شد`);
           if (res.queued > 0) parts.push(`${toFa(res.queued)} پیامک در صف بررسی است`);
           if (res.skippedForeign > 0) parts.push(`${toFa(res.skippedForeign)} پیامک متعلق به حساب دیگری بود و نادیده گرفته شد`);
           if (res.skippedSender > 0) parts.push(`${toFa(res.skippedSender)} پیامک از شماره‌های ناهمسان نادیده شد`);
@@ -741,6 +793,53 @@ function SmsAutoSync({ accounts }: { accounts: BankAccount[] }) {
                 <Button size="sm" variant="outline" className="h-7 shrink-0 text-xs" onClick={() => setPickerOpen(true)}>
                   دیدن شماره‌ها
                 </Button>
+              </div>
+            )}
+            {/* گزارش همگام‌سازی — همیشه نمایان، تا کاربر ببیند بررسی واقعاً انجام شده یا نه */}
+            {lastResult && !lastResult.ok && (
+              <div className="rounded-xl border border-red-300 bg-red-50 p-3 text-xs leading-5 text-red-900 dark:border-red-500/40 dark:bg-red-950/40 dark:text-red-200">
+                <div className="font-bold">بررسی پیامک‌ها انجام نشد</div>
+                <div className="mt-0.5">
+                  {lastResult.reason === "no_senders"
+                    ? "هنوز هیچ شماره فرستنده‌ای به حساب‌ها وصل نشده — دکمه «شماره‌های روی گوشی» را بزنید و شماره بانک را به حساب اضافه کنید."
+                    : lastResult.reason === "permission"
+                      ? "دسترسی پیامک فعال نیست — دسترسی را از گوشی اجازه دهید."
+                      : lastResult.reason === "not_native"
+                        ? "این قابلیت فقط در اپ اندروید (APK) کار می‌کند."
+                        : "خطا در خواندن صندوق پیامک — دوباره تلاش کنید."}
+                </div>
+              </div>
+            )}
+            {lastResult?.ok && (
+              <div className="grid grid-cols-3 gap-2 rounded-xl border bg-muted/40 p-3 text-center text-xs sm:grid-cols-4">
+                <div>
+                  <div className="text-muted-foreground">خوانده‌شده</div>
+                  <div className="font-bold tabular-nums-persian">{toFa(lastResult.total)}</div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">پیامک بانکی</div>
+                  <div className="font-bold tabular-nums-persian">{toFa(lastResult.bankCount)}</div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">ثبت خودکار</div>
+                  <div className="font-bold tabular-nums-persian text-emerald-700 dark:text-emerald-400">{toFa(lastResult.imported)}</div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">در صف بررسی</div>
+                  <div className="font-bold tabular-nums-persian text-amber-600">{toFa(lastResult.queued)}</div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">موجودی به‌روز شد</div>
+                  <div className="font-bold tabular-nums-persian text-emerald-700 dark:text-emerald-400">{toFa(lastResult.balanceUpdated)}</div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">شماره ناهمسان</div>
+                  <div className="font-bold tabular-nums-persian">{toFa(lastResult.skippedSender)}</div>
+                </div>
+                <div>
+                  <div className="text-muted-foreground">حساب غریبه</div>
+                  <div className="font-bold tabular-nums-persian">{toFa(lastResult.skippedForeign)}</div>
+                </div>
               </div>
             )}
             <div className="flex items-center justify-between rounded-xl border p-3">
@@ -1193,9 +1292,24 @@ export function Banks({ onOpenTxDialog }: { onOpenTxDialog?: () => void }) {
                     </div>
                   )}
                   <div className="mt-3 text-2xl font-bold tabular-nums-persian">
-                    {formatMoneyU(balance)}
+                    {formatMoneyU(acc.smsBalance != null ? acc.smsBalance : balance)}
                     <span className="mr-1 text-xs font-normal text-muted-foreground">{currencyLabel()}</span>
                   </div>
+                  {acc.smsBalance != null ? (
+                    <div className="mt-1 space-y-0.5">
+                      <div className="flex items-center gap-1 text-[11px] font-medium text-emerald-700 dark:text-emerald-400">
+                        <BadgeCheck className="h-3.5 w-3.5" />
+                        <span>
+                          موجودی بانک — از پیامک {acc.smsBalanceDate ? new Date(acc.smsBalanceDate).toLocaleDateString("fa-IR") : ""}
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-muted-foreground">
+                        محاسبه‌شده از تراکنش‌ها: <span className="tabular-nums-persian">{formatMoneyU(balance)}</span>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="mt-1 text-[11px] text-muted-foreground">محاسبه‌شده از تراکنش‌ها — با پیامک «مانده» بانک دقیق می‌شود</div>
+                  )}
                   <div className="mt-3 space-y-1 text-xs text-muted-foreground">
                     <div className="flex justify-between">
                       <span>موجودی اولیه</span>

@@ -19,6 +19,8 @@ export interface BankAccount {
   iban?: string | null;
   smsSender?: string | null; // شماره(های) فرستنده پیامک بانک — فقط پیامک همین شماره‌ها خوانده می‌شود (جداکننده: کاما)
   initialBalance: number;
+  smsBalance?: number | null; // موجودی گزارش‌شده از آخرین پیامک بانک (ریال) — مرجع نمایش «موجودی بانک»
+  smsBalanceDate?: string | null; // تاریخ (ISO) پیامکی که موجودی از آن خوانده شد
   color: string;
   isArchived: boolean;
   createdAt: string;

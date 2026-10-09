@@ -134,6 +134,8 @@ async function createBankAccount(body: Record<string, unknown>): Promise<BankAcc
     iban: (body.iban as string) || null,
     smsSender: (body.smsSender as string) || null,
     initialBalance: num(body.initialBalance),
+    smsBalance: (body.smsBalance as number) || null,
+    smsBalanceDate: (body.smsBalanceDate as string) || null,
     color: (body.color as string) || "#8b5cf6",
     isArchived: false,
     createdAt: nowIso(),
@@ -154,6 +156,9 @@ async function updateBankAccount(id: string, body: Record<string, unknown>): Pro
     iban: body.iban !== undefined ? (body.iban as string) || null : existing.iban,
     smsSender: body.smsSender !== undefined ? (body.smsSender as string) || null : existing.smsSender,
     initialBalance: body.initialBalance !== undefined ? num(body.initialBalance) : existing.initialBalance,
+    // موجودی بانکی از پیامک — فقط همگام‌سازی پیامک اجازه تغییرش دارد (body.smsBalanceClear برای صفر کردن)
+    smsBalance: body.smsBalance !== undefined ? ((body.smsBalance as number) || null) : existing.smsBalance ?? null,
+    smsBalanceDate: body.smsBalanceDate !== undefined ? ((body.smsBalanceDate as string) || null) : existing.smsBalanceDate ?? null,
     color: body.color !== undefined ? String(body.color) : existing.color,
     updatedAt: nowIso(),
   };

@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { QueryClient, QueryClientProvider, useQueryClient } from "@tanstack/react-query";
+import { useState } from "react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { useQuery } from "@tanstack/react-query";
@@ -14,9 +14,7 @@ import { Categories } from "@/components/hesab/categories";
 import { Settings } from "@/components/hesab/settings";
 import { TxDialog } from "@/components/hesab/transactions";
 import { api, type Category, type BankAccount } from "@/lib/client-api";
-import { isNativeAndroid, getSmsPermission } from "@/lib/native-sms";
-import { syncBankSms } from "@/lib/sms-sync";
-import { useToast } from "@/hooks/use-toast";
+import { SmsBackgroundSync } from "@/components/hesab/sms-background-sync";
 
 const TABS = [
   { value: "dashboard", label: "داشبورد", icon: LayoutDashboard },
@@ -30,31 +28,9 @@ const TABS = [
 function AppContent() {
   const [tab, setTab] = useState("dashboard");
   const [txOpen, setTxOpen] = useState(false);
-  const qc = useQueryClient();
-  const { toast } = useToast();
 
-  // همگام‌سازی خودکار پیامک‌های بانکی در باز شدن برنامه (فقط اندروید)
-  useEffect(() => {
-    void (async () => {
-      try {
-        if (!isNativeAndroid()) return;
-        const p = await getSmsPermission();
-        if (p !== "granted") return;
-        const res = await syncBankSms();
-        if (res.ok && (res.imported > 0 || res.queued > 0)) {
-          qc.invalidateQueries();
-          const desc =
-            res.imported > 0
-              ? `${res.imported.toLocaleString("fa-IR")} تراکنش خودکار ثبت شد${res.queued > 0 ? ` و ${res.queued.toLocaleString("fa-IR")} مورد در صف بررسی است` : ""}`
-              : `${res.queued.toLocaleString("fa-IR")} پیامک در صف بررسی است`;
-          toast({ title: "پیامک‌های بانکی بررسی شد", description: desc });
-        }
-      } catch {
-        // بی‌صدا — همگام‌سازی نباید باز شدن برنامه را مختل کند
-      }
-    })();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // همگام‌سازی پس‌زمینه پیامک‌های بانکی — باز شدن برنامه، بازگشت از پس‌زمینه، پیامک زنده (در هر تب)
+  // منطق در SmsBackgroundSync است؛ اینجا فقط نصب می‌شود.
 
   const { data: categories } = useQuery<Category[]>({
     queryKey: ["categories"],
@@ -67,6 +43,7 @@ function AppContent() {
 
   return (
     <div className="flex min-h-screen flex-col">
+      <SmsBackgroundSync />
       {/* هدر */}
       <header className="sticky top-0 z-20 border-b bg-background/90 backdrop-blur">
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
@@ -144,7 +121,7 @@ function AppContent() {
       {/* فوتر */}
       <footer className="mt-auto hidden border-t bg-card py-4 lg:block">
         <div className="mx-auto max-w-6xl px-4 text-center text-xs text-muted-foreground">
-          حساب‌یار — نسخه ۲.۶.۰ | اپلیکیشن آفلاین — ثبت خودکار پیامک بانکی
+          حساب‌یار — نسخه ۲.۷.۰ | اپلیکیشن آفلاین — ثبت خودکار پیامک بانکی
         </div>
       </footer>
 
