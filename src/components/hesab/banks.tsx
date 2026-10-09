@@ -144,7 +144,8 @@ function AccountDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md" dir="rtl">
+      {/* فرم اضافه/ویرایش حساب — قابل اسکرول در صفحه‌های کوچک */}
+      <DialogContent className="max-h-[92dvh] overflow-y-auto sm:max-w-md" dir="rtl">
         <DialogHeader>
           <DialogTitle>{editing ? "ویرایش حساب" : "افزودن حساب بانکی"}</DialogTitle>
         </DialogHeader>
@@ -383,7 +384,11 @@ function SenderPickerDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-lg" dir="rtl">
+      {/* تمام‌صفحه در موبایل — قبلاً فضای دیالوگ تنگ بود و نوشته‌ها روی هم می‌افتادند */}
+      <DialogContent
+        className="h-[100dvh] w-full max-w-none overflow-y-auto rounded-none sm:h-auto sm:max-h-[88dvh] sm:max-w-xl sm:rounded-2xl"
+        dir="rtl"
+      >
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <MessagesSquare className="h-5 w-5 text-emerald-700" />
@@ -406,13 +411,13 @@ function SenderPickerDialog({
         ) : groups.length === 0 ? (
           <p className="py-6 text-center text-sm text-muted-foreground">پیامکی در ۳۰ روز اخیر پیدا نشد</p>
         ) : (
-          <div className="max-h-[50vh] space-y-1.5 overflow-y-auto">
+          <div className="max-h-[58dvh] space-y-1.5 overflow-y-auto">
             {groups.slice(0, 50).map((g) => {
               const isConfigured = senderMatches(g.raw, configured);
               const isPersonal = /^(\+?98|0)?9\d{9}$/.test(g.raw.replace(/\s/g, "")) && g.raw.replace(/\D/g, "").length === 11;
               return (
                 <div key={g.norm} className="rounded-xl border p-2.5">
-                  <div className="flex items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex min-w-0 items-center gap-2">
                       <span dir="ltr" className="shrink-0 font-bold">{g.raw}</span>
                       <Badge variant="secondary" className="shrink-0">{toFa(g.count)} پیامک</Badge>
@@ -423,7 +428,7 @@ function SenderPickerDialog({
                         <CheckCheck className="ml-1 h-3 w-3" /> تنظیم شده
                       </Badge>
                     ) : attachFor === g.norm ? (
-                      <div className="flex shrink-0 items-center gap-1">
+                      <div className="flex w-full flex-wrap items-center gap-1 sm:w-auto">
                         <Select value={pickedAccount} onValueChange={setPickedAccount}>
                           <SelectTrigger className="h-8 w-[130px] text-xs">
                             <SelectValue placeholder="انتخاب حساب" />

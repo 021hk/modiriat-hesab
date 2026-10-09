@@ -31,6 +31,13 @@ import {
 import { useToast } from "@/hooks/use-toast";
 import { Plus, MoreVertical, Pencil, Trash2, Search, MessageSquareText } from "lucide-react";
 import { api, type Transaction, type Category, type BankAccount } from "@/lib/client-api";
+import { flattenCategoryTree } from "@/lib/category-tree";
+import {
+  dateToJalaliParts,
+  jalaliPartsToIso,
+  jalaliMonthLength,
+  JALALI_MONTH_NAMES,
+} from "@/lib/jalali";
 import {
   formatMoney,
   formatMoneyPlain,
@@ -41,6 +48,85 @@ import {
   toDisplayAmount,
   toStoredAmount,
 } from "@/lib/format";
+
+// انتخابگر تاریخ/ساعت جلالی — سال ← ماه ← روز ← ساعت (ترتیب درست برای کاربر ایرانی)
+// تاریخ دقیق (با ساعت) ذخیره می‌شود تا ترتیب تراکنش‌ها درست باشد
+function JalaliDateTimePicker({ value, onChange }: { value: string; onChange: (iso: string) => void }) {
+  const parts = dateToJalaliParts(new Date(value));
+  const [jy, setJy] = useState(parts.jy);
+  const [jm, setJm] = useState(parts.jm);
+  const [jd, setJd] = useState(parts.jd);
+  const [hhmm, setHhmm] = useState(
+    () => `${String(parts.hour).padStart(2, "0")}:${String(parts.minute).padStart(2, "0")}`
+  );
+
+  const dayLen = jalaliMonthLength(jy, jm);
+  const effDay = Math.min(jd, dayLen);
+  const [h, m] = hhmm.split(":").map((x) => Number(x) || 0);
+
+  const emit = (ny: number, nm: number, nd: number) => {
+    onChange(jalaliPartsToIso(ny, nm, Math.min(nd, jalaliMonthLength(ny, nm)), h, m));
+  };
+
+  const years: number[] = [];
+  for (let y = parts.jy + 1; y >= parts.jy - 20; y--) years.push(y);
+
+  const selectCls = "h-9 text-xs";
+
+  return (
+    <div className="space-y-2">
+      <div className="grid grid-cols-3 gap-2">
+        <div className="grid gap-1">
+          <Label className="text-[11px] text-muted-foreground">سال</Label>
+          <Select value={String(jy)} onValueChange={(v) => { setJy(Number(v)); emit(Number(v), jm, effDay); }}>
+            <SelectTrigger className={selectCls}><SelectValue /></SelectTrigger>
+            <SelectContent className="max-h-56">
+              {years.map((y) => (
+                <SelectItem key={y} value={String(y)}>{y.toLocaleString("fa-IR", { useGrouping: false })}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="grid gap-1">
+          <Label className="text-[11px] text-muted-foreground">ماه</Label>
+          <Select value={String(jm)} onValueChange={(v) => { setJm(Number(v)); emit(jy, Number(v), effDay); }}>
+            <SelectTrigger className={selectCls}><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {JALALI_MONTH_NAMES.map((name, i) => (
+                <SelectItem key={i + 1} value={String(i + 1)}>{name}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="grid gap-1">
+          <Label className="text-[11px] text-muted-foreground">روز</Label>
+          <Select value={String(effDay)} onValueChange={(v) => { setJd(Number(v)); emit(jy, jm, Number(v)); }}>
+            <SelectTrigger className={selectCls}><SelectValue /></SelectTrigger>
+            <SelectContent className="max-h-56">
+              {Array.from({ length: dayLen }, (_, i) => i + 1).map((d) => (
+                <SelectItem key={d} value={String(d)}>{d.toLocaleString("fa-IR", { useGrouping: false })}</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <div className="grid gap-1">
+        <Label className="text-[11px] text-muted-foreground">ساعت</Label>
+        <Input
+          type="time"
+          dir="ltr"
+          className="text-left"
+          value={hhmm}
+          onChange={(e) => {
+            setHhmm(e.target.value);
+            const [nh, nm2] = e.target.value.split(":").map((x) => Number(x) || 0);
+            onChange(jalaliPartsToIso(jy, jm, effDay, nh, nm2));
+          }}
+        />
+      </div>
+    </div>
+  );
+}
 
 function TxDialog({
   open,
@@ -70,10 +156,7 @@ function TxDialog({
   const [purpose, setPurpose] = useState(preset?.purpose || editing?.purpose || "");
   const [categoryId, setCategoryId] = useState(editing?.categoryId || "");
   const [bankAccountId, setBankAccountId] = useState(preset?.bankAccountId || editing?.bankAccountId || "");
-  const [date, setDate] = useState(() => {
-    const d = editing ? new Date(editing.date) : new Date();
-    return new Date(d.getTime() - d.getTimezoneOffset() * 60000).toISOString().slice(0, 10);
-  });
+  const [dateIso, setDateIso] = useState(editing?.date || new Date().toISOString());
 
   const mutation = useMutation({
     mutationFn: async () => {
@@ -83,7 +166,7 @@ function TxDialog({
         purpose: purpose || null,
         categoryId: categoryId || null,
         bankAccountId: bankAccountId || null,
-        date: new Date(date).toISOString(),
+        date: dateIso,
       };
       if (editing) return api.put(`/api/transactions/${editing.id}`, body);
       return api.post("/api/transactions", body);
@@ -98,6 +181,8 @@ function TxDialog({
   });
 
   const filteredCats = categories.filter((c) => c.type === type);
+  // زیرشاخه‌ها با تودرتو و ترتیب درختی در فهرست انتخاب دیده می‌شوند
+  const flatCats = flattenCategoryTree(filteredCats);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -168,11 +253,11 @@ function TxDialog({
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="none">بدون دسته</SelectItem>
-                  {filteredCats.map((c) => (
+                  {flatCats.map(({ category: c, label }) => (
                     <SelectItem key={c.id} value={c.id}>
                       <span className="flex items-center gap-2">
-                        <span className="h-2 w-2 rounded-full" style={{ backgroundColor: c.color }} />
-                        {c.name}
+                        <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: c.color }} />
+                        {label}
                       </span>
                     </SelectItem>
                   ))}
@@ -198,14 +283,8 @@ function TxDialog({
           </div>
 
           <div className="grid gap-2">
-            <Label htmlFor="date">تاریخ</Label>
-            <Input
-              id="date"
-              type="date"
-              value={date}
-              onChange={(e) => setDate(e.target.value)}
-              className="tabular-nums-persian"
-            />
+            <Label>تاریخ و ساعت</Label>
+            <JalaliDateTimePicker value={dateIso} onChange={setDateIso} />
           </div>
         </div>
         <DialogFooter>
@@ -234,6 +313,9 @@ export function Transactions({ categories, accounts }: { categories: Category[];
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Transaction | null>(null);
   const [preset, setPreset] = useState<{ type?: "income" | "expense"; amount?: number; purpose?: string; bankAccountId?: string } | null>(null);
+  // هر بار باز شدن دیالوگ یک شماره جدید — با key باعث نصب مجدد می‌شود تا داده‌های
+  // تراکنش در حال ویرایش همیشه از نو در فرم بنشیند (قبلاً فرم خالی/کهنه می‌ماند)
+  const [openSeq, setOpenSeq] = useState(0);
 
   const params = new URLSearchParams();
   if (typeFilter !== "all") params.set("type", typeFilter);
@@ -257,12 +339,14 @@ export function Transactions({ categories, accounts }: { categories: Category[];
   const openNew = (p?: { type?: "income" | "expense"; amount?: number; purpose?: string; bankAccountId?: string } | null) => {
     setEditing(null);
     setPreset(p || null);
+    setOpenSeq((s) => s + 1);
     setDialogOpen(true);
   };
 
   const openEdit = (tx: Transaction) => {
     setPreset(null);
     setEditing(tx);
+    setOpenSeq((s) => s + 1);
     setDialogOpen(true);
   };
 
@@ -296,9 +380,9 @@ export function Transactions({ categories, accounts }: { categories: Category[];
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="all">همه دسته‌ها</SelectItem>
-            {categories.map((c) => (
+            {flattenCategoryTree(categories).map(({ category: c, label }) => (
               <SelectItem key={c.id} value={c.id}>
-                {c.name}
+                {label}
               </SelectItem>
             ))}
           </SelectContent>
@@ -394,6 +478,7 @@ export function Transactions({ categories, accounts }: { categories: Category[];
       )}
 
       <TxDialog
+        key={openSeq}
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         editing={editing}

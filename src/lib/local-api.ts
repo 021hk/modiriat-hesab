@@ -10,6 +10,8 @@ import {
   type StoreName,
 } from "@/lib/local-db";
 import { parseBankSms, type SmsParseResult } from "@/lib/sms-parser";
+import { categoryDepthById, MAX_CATEGORY_DEPTH } from "@/lib/category-tree";
+import { jalaliMonthBounds } from "@/lib/jalali";
 import type {
   Category,
   BankAccount,
@@ -78,12 +80,29 @@ async function listCategories(): Promise<Category[]> {
 async function createCategory(body: Record<string, unknown>): Promise<Category> {
   const name = typeof body.name === "string" ? body.name.trim() : "";
   if (!name) fail("نام دسته الزامی است");
+
+  // ─── سلسله‌مراتب: حداکثر ۳ زیرشاخه زیر ریشه (عمق ۴) و فقط با کلید «زیرشاخه فعال» والد ───
+  let parentId: string | null = null;
+  let type = body.type === "income" ? "income" : "expense";
+  if (body.parentId) {
+    const parent = await dbGet<Category>(STORES.categories, String(body.parentId));
+    if (!parent) fail("دسته والد پیدا نشد");
+    if (parent.allowSub === false) fail("برای این دسته، زیرشاخه غیرفعال است");
+    const cats = await dbGetAll<Category>(STORES.categories);
+    const depth = categoryDepthById(cats, parent.id);
+    if (depth >= MAX_CATEGORY_DEPTH) fail("حداکثر ۳ زیرشاخه مجاز است");
+    parentId = parent.id;
+    type = parent.type; // زیرشاخه همان نوع والد است
+  }
+
   const cat: Category = {
     id: newId(),
     name,
-    type: body.type === "income" ? "income" : "expense",
+    type: type as "income" | "expense",
     color: (body.color as string) || "#10b981",
     icon: (body.icon as string) || "Tag",
+    parentId,
+    allowSub: body.allowSub !== false, // پیش‌فرض: زیرشاخه فعال
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
@@ -93,12 +112,20 @@ async function createCategory(body: Record<string, unknown>): Promise<Category> 
 
 async function updateCategory(id: string, body: Record<string, unknown>): Promise<Category> {
   const existing = await getOrThrow<Category>(STORES.categories, id);
+  // خاموش‌کردن «زیرشاخه فعال» وقتی فرزند دارد مجاز نیست
+  if (body.allowSub === false && existing.allowSub !== false) {
+    const cats = await dbGetAll<Category>(STORES.categories);
+    if (cats.some((c) => c.parentId === id)) {
+      fail("اول زیرشاخه‌های این دسته را حذف کنید");
+    }
+  }
   const updated: Category = {
     ...existing,
     name: body.name !== undefined ? String(body.name).trim() || existing.name : existing.name,
     type: body.type === "income" || body.type === "expense" ? body.type : existing.type,
     color: body.color !== undefined ? String(body.color) : existing.color,
     icon: body.icon !== undefined ? String(body.icon) : existing.icon,
+    allowSub: body.allowSub !== undefined ? body.allowSub !== false : existing.allowSub,
     updatedAt: nowIso(),
   };
   await dbPut(STORES.categories, updated);
@@ -107,11 +134,26 @@ async function updateCategory(id: string, body: Record<string, unknown>): Promis
 
 async function deleteCategory(id: string): Promise<void> {
   await getOrThrow<Category>(STORES.categories, id);
+  // کل زیردرخت حذف می‌شود (ریشه + همه زیرشاخه‌ها)
+  const cats = await dbGetAll<Category>(STORES.categories);
+  const doomed = new Set<string>([id]);
+  let grew = true;
+  while (grew) {
+    grew = false;
+    for (const c of cats) {
+      if (c.parentId && doomed.has(c.parentId) && !doomed.has(c.id)) {
+        doomed.add(c.id);
+        grew = true;
+      }
+    }
+  }
   const txs = await dbGetAll<Transaction>(STORES.transactions);
   for (const t of txs) {
-    if (t.categoryId === id) await dbPut(STORES.transactions, { ...t, categoryId: null, updatedAt: nowIso() });
+    if (t.categoryId && doomed.has(t.categoryId)) {
+      await dbPut(STORES.transactions, { ...t, categoryId: null, updatedAt: nowIso() });
+    }
   }
-  await dbDelete(STORES.categories, id);
+  for (const cid of doomed) await dbDelete(STORES.categories, cid);
 }
 
 // ─── حساب‌های بانکی ───
@@ -197,7 +239,13 @@ async function listTransactions(query: URLSearchParams): Promise<Transaction[]> 
     );
   }
   txs.sort((a, b) => (a.date > b.date ? -1 : 1));
-  return txs.slice(0, limit);
+  const sliced = txs.slice(0, limit);
+  // نام دسته/حساب برای نمایش در لیست (قبلاً join نمی‌شد و نشان دسته هرگز نشان داده نمی‌شد)
+  const [cats, accs] = await Promise.all([
+    dbGetAll<Category>(STORES.categories),
+    dbGetAll<BankAccount>(STORES.bankAccounts),
+  ]);
+  return sliced.map((t) => joinTx(t, cats, accs));
 }
 
 function validateTxBody(body: Record<string, unknown>): void {
@@ -434,8 +482,8 @@ async function updateSmsLog(id: string, body: Record<string, unknown>): Promise<
 
 async function getStats(): Promise<Stats> {
   const now = new Date();
-  const startOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-  const startOfPrevMonth = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  // مرز «این ماه» با تقویم جلالی — قبلاً ماه میلادی بود و آمار با تقویم کاربر نمی‌خواند
+  const { currentStart: startOfMonth, prevStart: startOfPrevMonth } = jalaliMonthBounds(now);
 
   const [accounts, txs, debts] = await Promise.all([
     dbGetAll<BankAccount>(STORES.bankAccounts),
@@ -453,7 +501,8 @@ async function getStats(): Promise<Stats> {
       name: acc.name,
       bankName: acc.bankName,
       color: acc.color,
-      balance: num(acc.initialBalance) + inc - exp,
+      // موجودی بانکی از پیامک (مانده) اگر باشد مرجع است — همان عددی که کارت حساب نشان می‌دهد
+      balance: acc.smsBalance != null ? acc.smsBalance : num(acc.initialBalance) + inc - exp,
     };
   });
   const totalBalance = accountSummaries.reduce((s, a) => s + a.balance, 0);
@@ -470,12 +519,16 @@ async function getStats(): Promise<Stats> {
   const creditors = openDebts.filter((d) => d.type === "creditor");
 
   const byCategory: Record<string, { name: string; color: string; total: number }> = {};
+  // قبلاً روی تراکنش‌های join‌نشده t.category?.name می‌خواند → همیشه «بدون دسته» بود!
+  const cats = await dbGetAll<Category>(STORES.categories);
+  const catMap = new Map(cats.map((c) => [c.id, c]));
   for (const t of monthTx.filter((t) => t.type === "expense")) {
-    const key = t.categoryId || "بدون دسته";
+    const cat = t.categoryId ? catMap.get(t.categoryId) : undefined;
+    const key = cat ? cat.id : "بدون دسته";
     if (!byCategory[key]) {
       byCategory[key] = {
-        name: t.category?.name || "بدون دسته",
-        color: t.category?.color || "#94a3b8",
+        name: cat?.name || "بدون دسته",
+        color: cat?.color || "#94a3b8",
         total: 0,
       };
     }

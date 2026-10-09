@@ -5,6 +5,8 @@ export interface Category {
   type: "income" | "expense";
   color: string;
   icon: string;
+  parentId?: string | null; // دسته والد — null/undefined = ریشه
+  allowSub?: boolean; // «زیرشاخه فعال» — فقط اگر true باشد می‌توان زیر آن زیرشاخه ساخت (undefined = فعال)
   createdAt: string;
   updatedAt: string;
   _count?: { transactions: number };
