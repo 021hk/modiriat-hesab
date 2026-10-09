@@ -87,15 +87,30 @@ export function judgeSms(params: {
   }
   const parsed = parseBankSms(t);
   let accountId: string | null = null;
-  if (parsed.accountRefDigits || parsed.cardTail) {
+  const senderBound = accounts.filter((a) =>
+    parseConfiguredSenders(a.smsSender).some((s) => senderMatches(sender, [s]))
+  );
+  if (parsed.accountRefDigits) {
     accountId = matchAccountByRef(accounts, parsed.accountRefDigits, parsed.cardTail);
     if (!accountId) {
       return { verdict: "rejected_foreign", accountId: null, explanation: "شناسه حساب/کارت داخل پیامک با هیچ‌کدام از حساب‌های شما نمی‌خواند" };
     }
+  } else if (parsed.cardTail) {
+    accountId = matchAccountByRef(accounts, null, parsed.cardTail);
+    if (!accountId) {
+      if (senderBound.length === 1) {
+        accountId = senderBound[0].id;
+      } else {
+        return { verdict: "rejected_foreign", accountId: null, explanation: "۴ رقم آخر کارت/حساب با حساب‌های شما نمی‌خواند" };
+      }
+    }
   } else {
     accountId = matchAccountWithoutRef(accounts, parsed.bankName);
+    if (!accountId && senderBound.length === 1) accountId = senderBound[0].id;
   }
-  if (!parsed.amount || parsed.amount <= 0) {
+  let finalAmount = parsed.amount && parsed.amount > 0 ? parsed.amount : null;
+  if (finalAmount && parsed.unit === "toman") finalAmount *= 10;
+  if (!finalAmount) {
     return { verdict: "queued_no_amount", accountId, explanation: "مبلغ تشخیص داده نشد — در صف بررسی می‌آید (ثبت دستی مبلغ)" };
   }
   if (autoImport && parsed.confidence >= AUTO_CONFIDENCE && (parsed.type === "income" || parsed.type === "expense")) {
@@ -211,21 +226,40 @@ async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
     // ─── تفکیک حساب‌ها داخل یک شماره ───
     // اگر پیامک شماره حساب/کارت دارد، باید با یکی از حساب‌های خودمان بخواند؛ وگرنه مال حساب دیگری است → رد
     let accountId: string | null = null;
-    if (parsed.accountRefDigits || parsed.cardTail) {
+    // حساب‌های متصل به همین شماره فرستنده (برای fallback وقتی شناسه پیامک ناقص است)
+    const senderBound = accounts.filter((a) =>
+      parseConfiguredSenders(a.smsSender).some((s) => senderMatches(msg.sender, [s]))
+    );
+    if (parsed.accountRefDigits) {
+      // شناسه کامل حساب/کارت در پیامک هست → تطبیق سخت‌گیرانه؛ نخواند یعنی حساب دیگری است
       accountId = matchAccountByRef(accounts, parsed.accountRefDigits, parsed.cardTail);
       if (!accountId) {
         skippedForeign++; // پیامک حساب دیگری (مثلاً حساب دیگر اعضای خانواده در همان شماره بانک)
         continue;
       }
+    } else if (parsed.cardTail) {
+      // فقط ۴ رقم آخر (مثل «ملت**7266») → شواهد ضعیف است؛ اگر نخواند ولی دقیقاً یک حساب به این شماره وصل باشد، همان است
+      accountId = matchAccountByRef(accounts, null, parsed.cardTail);
+      if (!accountId) {
+        if (senderBound.length === 1) {
+          accountId = senderBound[0].id;
+        } else {
+          skippedForeign++;
+          continue;
+        }
+      }
     } else {
-      // بدون شناسه: فقط اگر دقیقاً یک حساب این شماره/بانک باشد قطعی است
+      // بدون شناسه: دقیقاً یک حساب این شماره/بانک → قطعی؛ وگرنه اگر یک حساب به این شماره وصل باشد
       accountId = matchAccountWithoutRef(accounts, parsed.bankName);
+      if (!accountId && senderBound.length === 1) accountId = senderBound[0].id;
     }
 
     bankCount++;
 
     // واحد پول: مبالغ همیشه به «ریال» ذخیره می‌شوند (نمایش بر اساس تنظیم کاربر تبدیل می‌شود)
-    const finalAmount = parsed.amount && parsed.amount > 0 ? parsed.amount : null;
+    let finalAmount = parsed.amount && parsed.amount > 0 ? parsed.amount : null;
+    // مبالغ همیشه به ریال ذخیره می‌شوند — پیامک تومانی باید ×۱۰ شود
+    if (finalAmount && parsed.unit === "toman") finalAmount *= 10;
 
     const dateIso = new Date(msg.date).toISOString();
     const baseLog = {

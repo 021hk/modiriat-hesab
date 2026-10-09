@@ -184,5 +184,63 @@ check("حکم: مبلغ تشخیص نشد → صف", judgeSms({ sender: "9999", 
 check("حکم: ارقام فارسی فرستنده می‌خواند", judgeSms({ sender: "+985000142", text: "واریز 1,500,000 ریال به حساب 333444555666", accounts: judgeAccounts, autoImport: true }).verdict, "auto_import");
 check("حکم: رمز یکبارمصرف → junk", judgeSms({ sender: "9999", text: "رمز یکبار مصرف شما: 12345", accounts: judgeAccounts, autoImport: true }).verdict, "rejected_junk");
 
+// ─── v2.6.0 — فرمت‌های واقعی بانک‌ها که قبلاً شناسایی نمی‌شدند ───
+
+// ۱) بدهکار/بستانکار (ملی، صادرات، مسکن، سپه، ...)
+const bedeh = parseBankSms("حساب 1001234567 بدهکار 500,000 ریال\nمانده 3,000,000 ریال");
+check("بدهکار → نوع برداشت", bedeh.type, "expense");
+check("بدهکار → مبلغ", bedeh.amount, 500000);
+check("بدهکار → شناسه حساب", bedeh.accountRefDigits, "1001234567");
+const bestan = parseBankSms("بانک مسکن: حساب 0101234567 بستانکار 1,000,000 ریال");
+check("بستانکار → نوع واریز", bestan.type, "income");
+check("بستانکار → مبلغ", bestan.amount, 1000000);
+
+// ۲) جداکننده هزارگان نقطه‌ای «1.500.000» (خیلی رایج — قبلاً 1500 تشخیص داده می‌شد!)
+const dotAmount = parseBankSms("برداشت مبلغ 1.500.000 ریال از حساب 1001234567");
+check("مبلغ نقطه‌ای → ۱۵۰۰۰۰۰", dotAmount.amount, 1500000);
+check("مبلغ نقطه‌ای → نوع", dotAmount.type, "expense");
+const dotLine = parseBankSms("777.888.13972872.1\n-1.500.000\nمانده: 66,663,400");
+check("خط مبلغ نقطه‌ای ساختاری", dotLine.amount, 1500000);
+check("خط مبلغ نقطه‌ای → علامت منفی → برداشت", dotLine.type, "expense");
+const dotUnit = parseBankSms("واریز 2.250.000 ریال");
+check("مبلغ نقطه‌ای کنار ریال", dotUnit.amount, 2250000);
+
+// ۳) فرمت «ملت**7266» — ۴ رقم آخر کارت
+const mellat = parseBankSms("ملت**7266\nبرداشت\nمبلغ: 350,000 ریال");
+check("ملت**7266 → دُم کارت", mellat.cardTail, "7266");
+check("ملت**7266 → بانک", mellat.bankName, "ملت");
+check("ملت**7266 → نوع", mellat.type, "expense");
+check("ملت**7266 → مبلغ", mellat.amount, 350000);
+
+// ۴) «حساب شماره 1234567890»
+const shomare = parseBankSms("واریز به حساب شماره 1001234567 مبلغ 750,000 ریال");
+check("حساب شماره → شناسه", shomare.accountRefDigits, "1001234567");
+check("حساب شماره → نوع", shomare.type, "income");
+
+// ۵) تومان → تبدیل به ریال در ذخیره
+const toman = parseBankSms("واریز 50,000 تومان به حساب 1234567890");
+check("تومان → واحد", toman.unit, "toman");
+check("تومان → مبلغ پیامک", toman.amount, 50000);
+
+// ۶) judgeSms: دُم کارت ملت**7266 با یک حساب متصل به شماره → همان حساب
+const judgeAccs = [
+  { id: "acc-m", bankName: "ملت", cardNumber: "6104337912342872", accountNumber: null, iban: null, smsSender: "9999" },
+] as never[];
+const jm = judgeSms({ sender: "+989999", text: "ملت**7266\nبرداشت\nمبلغ: 350,000 ریال", accounts: judgeAccs, autoImport: true });
+check("حکم: ملت**7266 → خودکار ثبت با حساب متصل", jm.verdict, "auto_import");
+check("حکم: حساب درست", jm.accountId, "acc-m");
+
+// ۷) بدهکار با دو حساب هم‌شماره و دُم ناهمسان → رد (سناریوی خانواده)
+const familyAccs = [
+  { id: "a1", bankName: "ملی", cardNumber: null, accountNumber: "1001234567", iban: null, smsSender: "9999" },
+  { id: "a2", bankName: "ملی", cardNumber: null, accountNumber: "9998887776", iban: null, smsSender: "9999" },
+] as never[];
+const jf = judgeSms({ sender: "9999", text: "حساب 5555444433 بدهکار 200,000 ریال", accounts: familyAccs, autoImport: true });
+check("حکم: حساب غریبه با شناسه کامل → رد", jf.verdict, "rejected_foreign");
+
+// ۸) هشدار رگرسیون: مبلغ «1.500» بدون هزارگان نباید خراب شود
+check("مبلغ ساده 500,000", parseBankSms("برداشت 500,000 ریال").amount, 500000);
+check("مبلغ ۱۲ رقمی بدون جداکننده", parseBankSms("برداشت 123456789012 ریال").amount, 123456789012);
+
 console.log(`\nنتیجه: ${pass} موفق، ${failCount} ناموفق`);
 if (failCount > 0) process.exit(1);

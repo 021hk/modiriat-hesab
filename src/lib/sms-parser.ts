@@ -67,11 +67,17 @@ export interface SmsParseResult {
 }
 
 function toNumber(raw: string): number {
-  return Number(raw.replace(/[,،]/g, "").replace(/\.(?=\d{3}\b)/g, ""));
+  return Number(
+    raw
+      .replace(/[,،]/g, "")
+      // نقطه فقط وقتی جداکننده هزارگان است که دقیقاً ۳ رقم بعدش باشد (1.500.000 → 1500000)
+      .replace(/\.(?=\d{3}(?:\b|\.))/g, "")
+      .replace(/\.$/, "")
+  );
 }
 
-const INCOME_HINTS = ["واریز", "افزایش موجودی", "دریافت", "وصول", "شارژ", "deposit", "credited"];
-const EXPENSE_HINTS = ["برداشت", "خرید", "کسر", "پرداخت", "انتقال وجه", "کارت به کارت", "کارمزد", "قبض", "withdraw", "debited"];
+const INCOME_HINTS = ["واریز", "افزایش موجودی", "دریافت", "وصول", "شارژ", "بستانکار", "واریز به حساب", "deposit", "credited"];
+const EXPENSE_HINTS = ["برداشت", "خرید", "کسر", "پرداخت", "انتقال وجه", "کارت به کارت", "کارمزد", "قبض", "بدهکار", "برداشت از حساب", "withdraw", "debited"];
 
 // خط تاریخ مثل: 07/10_02:10 یا 1404/07/10 02:10 یا 2026/10/02
 const DATE_LINE_RE = /^\d{1,4}[\/\-.]\d{1,2}(?:[\/\-.]\d{0,2})?[_\sT]\d{1,2}:\d{2}(?::\d{2})?$/;
@@ -130,14 +136,14 @@ export function parseBankSms(rawText: string): SmsParseResult {
 
   let amountIdx: number | null = null; // موقعیت مبلغ در متن (برای انتخاب کلیدواژه نزدیک)
 
-  // روش ۱: کلیدواژه «مبلغ» + عدد
-  const kw = text.match(/(?:مبلغ|به\s*مبلغ|withdraw|deposit)[^\d\-]{0,15}([\d,]+(?:\.\d+)?)/i);
+  // روش ۱: کلیدواژه «مبلغ» + عدد (جداکننده هزارگان هم کاما هم نقطه — «1.500.000» رایج است!)
+  const kw = text.match(/(?:مبلغ|به\s*مبلغ|withdraw|deposit)[^\d\-]{0,15}([\d][\d,\.]*)/i);
   if (kw && kw.index !== undefined) {
     amount = toNumber(kw[1]);
     amountIdx = kw.index;
   } else {
     // روش ۲: همه اعداد کنار واژه ریال/تومان → عددی که موجودی نیست
-    const unitRe = /([\d]{1,3}(?:[,]\d{3})+|[\d]{4,})\s*(?:ریال|ريال|تومان|rial|IRR)/gi;
+    const unitRe = /([\d]{1,3}(?:[,\.]\d{3})+|[\d]{4,})\s*(?:ریال|ريال|تومان|rial|IRR)/gi;
     const cands: { amount: number; index: number }[] = [];
     let um: RegExpExecArray | null;
     while ((um = unitRe.exec(text)) !== null) {
@@ -253,7 +259,7 @@ export function parseBankSms(rawText: string): SmsParseResult {
   if (!accountRef) {
     // «کارت 6037-9971-1234-5678» یا «حساب 1234567890» → کامل + ۴ رقم آخر
     // مراقبت: اگر عدد پشت آن واژه واحد پول دارد (مثل «کارت به کارت 2,000,000 ریال») مبلغ است نه شناسه
-    const mc = text.match(/(?:کارت|حساب)\s*[:：]?\s*([\d\-\.]{4,})\s*(?:ریال|ريال|تومان|rial|IRR)?/i);
+    const mc = text.match(/(?:کارت|حساب)\s*(?:شماره)?\s*[:：]?\s*([\d\-\.]{4,})\s*(?:ریال|ريال|تومان|rial|IRR)?/i);
     if (mc) {
       const digits = mc[1].replace(/\D/g, "");
       const groups = mc[1].split(/[.\-]/).filter(Boolean);
@@ -266,6 +272,14 @@ export function parseBankSms(rawText: string): SmsParseResult {
           cardTail = digits.slice(-4);
         }
       }
+    }
+  }
+
+  // فرمت «ملت**7266» یا «ملت ** 7266» → ۴ رقم آخر کارت/حساب (خیلی رایج در پیامک‌های بانکی)
+  if (!accountRefDigits) {
+    const starTail = text.match(/\*+\s*(\d{3,4})\b/);
+    if (starTail) {
+      cardTail = starTail[1];
     }
   }
 
