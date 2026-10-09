@@ -245,7 +245,8 @@ async function listTransactions(query: URLSearchParams): Promise<Transaction[]> 
     dbGetAll<Category>(STORES.categories),
     dbGetAll<BankAccount>(STORES.bankAccounts),
   ]);
-  return sliced.map((t) => joinTx(t, cats, accs));
+  // ⚠️ joinTx هرمی است — بدون Promise.all آرایه‌ای از Promise برمی‌گشت و لیست تراکنش‌ها خالی نشان داده می‌شد (باگ نسخه ۲.۸.۰)
+  return await Promise.all(sliced.map((t) => joinTx(t, cats, accs)));
 }
 
 function validateTxBody(body: Record<string, unknown>): void {
