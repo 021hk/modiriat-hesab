@@ -53,7 +53,8 @@ export function Dashboard({ onGoToTab }: { onGoToTab?: (tab: string) => void }) 
             <span className="text-sm">موجودی کل حساب‌ها</span>
           </div>
           <div className="mt-2 text-3xl font-bold tracking-tight lg:text-4xl">
-            {formatMoney(data.totalBalance)}
+            {/* ⚠️ formatMoneyU — قبلاً formatMoney بود و عدد ریال را با برچسب تومان (یک صفر اضافه) نشان می‌داد */}
+            {formatMoneyU(data.totalBalance)}
             <span className="mr-2 text-base font-normal text-emerald-200">{currencyLabel()}</span>
           </div>
           <div className="mt-4 flex flex-wrap gap-2">
@@ -188,7 +189,12 @@ export function Dashboard({ onGoToTab }: { onGoToTab?: (tab: string) => void }) 
                       {tx.type === "income" ? "+" : "-"}
                     </div>
                     <div>
-                      <div className="text-sm font-medium">{tx.purpose || tx.category?.name || (tx.type === "income" ? "درآمد" : "هزینه")}</div>
+                      <div className="text-sm font-medium">
+                        {tx.purpose || tx.category?.name || tx.debtName || (tx.type === "income" ? "درآمد" : "هزینه")}
+                        {tx.debtName && (
+                          <span className="mr-1 text-[10px] text-muted-foreground">— بدهی/طلب: {tx.debtName}</span>
+                        )}
+                      </div>
                       <div className="flex items-center gap-1 text-xs text-muted-foreground">
                         {formatDateShortFa(tx.date)}
                         {tx.source === "sms" && (

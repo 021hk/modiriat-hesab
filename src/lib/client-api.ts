@@ -41,6 +41,8 @@ export interface Transaction {
   date: string;
   source: "manual" | "sms";
   rawSms?: string | null;
+  debtId?: string | null; // اگر این تراکنش بابت بدهی/طلب باشد — شناسه رکورد بدهی
+  debtName?: string | null; // نام شخص برای نمایش سریع در لیست
   createdAt: string;
   updatedAt: string;
 }

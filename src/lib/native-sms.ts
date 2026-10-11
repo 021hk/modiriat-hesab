@@ -13,6 +13,7 @@ export interface HesabSmsPluginInterface {
   checkPermissions(): Promise<{ sms: string }>;
   requestPermissions(): Promise<{ sms: string }>;
   readInbox(options: { since: number; limit?: number }): Promise<{ messages: NativeSms[] }>;
+  openUrl(options: { url: string }): Promise<void>;
   addListener(
     eventName: "smsReceived",
     listenerFunc: (sms: NativeSms) => void
@@ -61,4 +62,21 @@ export async function readInboxSince(since: number, limit = 400): Promise<Native
   if (!isNativeAndroid()) return [];
   const res = await HesabSms.readInbox({ since, limit });
   return res?.messages || [];
+}
+
+/** باز کردن URL خارجی (مثل دانلود APK نسخه جدید) در مرورگر سیستم — در وب fallback به window.open */
+export async function openExternalUrl(url: string): Promise<void> {
+  if (isNativeAndroid()) {
+    try {
+      await HesabSms.openUrl({ url });
+      return;
+    } catch {
+      // اگر پلاگین پاسخ نداد، fallback پایین اجرا می‌شود
+    }
+  }
+  try {
+    window.open(url, "_blank");
+  } catch {
+    // ignore
+  }
 }

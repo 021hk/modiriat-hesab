@@ -97,6 +97,24 @@ public class HesabSmsPlugin extends Plugin {
     // checkPermissions و requestPermissions به‌صورت خودکار توسط Capacitor
     // از روی @CapacitorPlugin(permissions=...) فراهم می‌شوند (alias = "sms")
 
+    /** باز کردن URL خارجی (مثل دانلود APK نسخه جدید) در مرورگر/برنامه مقصد سیستم */
+    @PluginMethod
+    public void openUrl(PluginCall call) {
+        String url = call.getString("url");
+        if (url == null || url.isEmpty()) {
+            call.reject("INVALID_URL", "آدرس نامعتبر است");
+            return;
+        }
+        try {
+            Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(url));
+            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+            bridge.getActivity().startActivity(intent);
+            call.resolve();
+        } catch (Exception e) {
+            call.reject("OPEN_ERROR", e.getMessage());
+        }
+    }
+
     @PluginMethod
     public void readInbox(PluginCall call) {
         if (!hasRequiredPermissions()) {

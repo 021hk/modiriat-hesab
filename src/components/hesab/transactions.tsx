@@ -29,8 +29,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, MoreVertical, Pencil, Trash2, Search, MessageSquareText } from "lucide-react";
-import { api, type Transaction, type Category, type BankAccount } from "@/lib/client-api";
+import { Plus, MoreVertical, Pencil, Trash2, Search, MessageSquareText, HandCoins, Check } from "lucide-react";
+import { api, type Transaction, type Category, type BankAccount, type Debt } from "@/lib/client-api";
 import { flattenCategoryTree } from "@/lib/category-tree";
 import {
   dateToJalaliParts,
@@ -158,22 +158,75 @@ function TxDialog({
   const [bankAccountId, setBankAccountId] = useState(preset?.bankAccountId || editing?.bankAccountId || "");
   const [dateIso, setDateIso] = useState(editing?.date || new Date().toISOString());
 
+  // ─── بدهی/طلب: ثبت تراکنش بابت قرض، پرداخت بدهی، دریافت طلب یا قرض گرفتن ───
+  const linkedToDebt = Boolean(editing?.debtId); // تراکنش متصل — جلوگیری از دوبار‌شماری
+  const [debtEnabled, setDebtEnabled] = useState(false);
+  const [personName, setPersonName] = useState("");
+  const [debtMode, setDebtMode] = useState<"lend" | "repay" | "collect" | "borrow">(
+    type === "income" ? "collect" : "lend"
+  );
+  const { data: existingDebts } = useQuery<Debt[]>({
+    queryKey: ["debts"],
+    queryFn: () => api.get("/api/debts"),
+    enabled: open,
+  });
+  const personSuggestions = Array.from(
+    new Set((existingDebts || []).map((d) => d.name).filter(Boolean))
+  );
+
+  const switchType = (t: "income" | "expense") => {
+    setType(t);
+    // حالت بدهی/طلب باید با نوع تراکنش هماهنگ بماند
+    setDebtMode((m) => {
+      if (t === "income") return m === "lend" ? "collect" : m === "repay" ? "borrow" : m;
+      return m === "collect" ? "lend" : m === "borrow" ? "repay" : m;
+    });
+  };
+
+  const displayAmount = formatMoneyU(toStoredAmount(parseMoneyInput(amount)));
+  const debtHint: Record<string, string> = {
+    lend: `«${personName || "شخص"}» مبلغ ${displayAmount} به شما بدهکار می‌شود (بدهکار جدید/افزایش طلب شما از او)`,
+    repay: `بدهی شما به «${personName || "شخص"}» به اندازه ${displayAmount} کم می‌شود`,
+    collect: `طلب شما از «${personName || "شخص"}» به اندازه ${displayAmount} کم می‌شود`,
+    borrow: `بدهی شما به «${personName || "شخص"}» به اندازه ${displayAmount} بیشتر می‌شود`,
+  };
+  const debtModeOptions =
+    type === "expense"
+      ? [
+          { v: "lend", label: "قرض دادم" },
+          { v: "repay", label: "پرداخت بدهی‌ام" },
+        ]
+      : [
+          { v: "collect", label: "دریافت طلبم" },
+          { v: "borrow", label: "قرض گرفتم" },
+        ];
+
   const mutation = useMutation({
     mutationFn: async () => {
       const body = {
         type,
         amount: toStoredAmount(parseMoneyInput(amount)),
         purpose: purpose || null,
-        categoryId: categoryId || null,
-        bankAccountId: bankAccountId || null,
+        categoryId: categoryId === "none" ? null : categoryId || null,
+        bankAccountId: bankAccountId === "none" ? null : bankAccountId || null,
         date: dateIso,
       };
-      if (editing) return api.put(`/api/transactions/${editing.id}`, body);
-      return api.post("/api/transactions", body);
+      const saved: Transaction = editing
+        ? await api.put<Transaction>(`/api/transactions/${editing.id}`, body)
+        : await api.post<Transaction>("/api/transactions", body);
+      // اتصال به بدهی/طلب بعد از ثبت خود تراکنش (در ویرایشِ تراکنشِ متصل، دست نمی‌زنیم تا دوبار شمرده نشود)
+      if (debtEnabled && personName.trim() && !linkedToDebt) {
+        await api.post(`/api/transactions/${saved.id}/link-debt`, {
+          personName: personName.trim(),
+          mode: debtMode,
+        });
+      }
+      return saved;
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["transactions"] });
       qc.invalidateQueries({ queryKey: ["stats"] });
+      qc.invalidateQueries({ queryKey: ["debts"] });
       toast({ title: editing ? "تراکنش ویرایش شد" : "تراکنش ثبت شد" });
       onOpenChange(false);
     },
@@ -190,12 +243,12 @@ function TxDialog({
         <DialogHeader>
           <DialogTitle>{editing ? "ویرایش تراکنش" : "ثبت تراکنش جدید"}</DialogTitle>
         </DialogHeader>
-        <div className="grid gap-4 py-2">
+        <div className="grid gap-4 py-2 max-h-[75dvh] overflow-y-auto pl-1">
           {/* نوع */}
           <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
-              onClick={() => setType("expense")}
+              onClick={() => switchType("expense")}
               className={`rounded-xl border-2 p-3 text-sm font-medium transition ${
                 type === "expense"
                   ? "border-red-500 bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300"
@@ -206,7 +259,7 @@ function TxDialog({
             </button>
             <button
               type="button"
-              onClick={() => setType("income")}
+              onClick={() => switchType("income")}
               className={`rounded-xl border-2 p-3 text-sm font-medium transition ${
                 type === "income"
                   ? "border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
@@ -281,6 +334,78 @@ function TxDialog({
               </Select>
             </div>
           </div>
+
+          {/* بدهی/طلب */}
+          {linkedToDebt ? (
+            <div className="flex items-start gap-2 rounded-xl border bg-muted/40 p-3 text-xs leading-5 text-muted-foreground">
+              <HandCoins className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
+              <span>
+                این تراکنش بابت بدهی/طلب «{editing?.debtName}» ثبت شده است. برای اصلاح، مبلغ را از بخش
+                «بدهی‌ها» ویرایش کنید تا دوبار شمرده نشود.
+              </span>
+            </div>
+          ) : (
+            <div className="rounded-xl border p-3">
+              <button
+                type="button"
+                onClick={() => setDebtEnabled((v) => !v)}
+                className="flex w-full items-center justify-between text-sm font-medium"
+              >
+                <span className="flex items-center gap-2">
+                  <HandCoins className="h-4 w-4 text-amber-600 dark:text-amber-400" />
+                  بابت بدهی یا طلب ثبت شود؟
+                </span>
+                <span
+                  className={`flex h-5 w-9 items-center rounded-full p-0.5 transition ${
+                    debtEnabled ? "bg-amber-500" : "bg-muted-foreground/30"
+                  }`}
+                >
+                  <span
+                    className={`h-4 w-4 rounded-full bg-white shadow transition-transform ${
+                      debtEnabled ? "translate-x-0" : "-translate-x-4"
+                    }`}
+                  />
+                </span>
+              </button>
+              {debtEnabled && (
+                <div className="mt-3 space-y-2">
+                  <Input
+                    placeholder="نام شخص (مثلاً: علی)"
+                    value={personName}
+                    onChange={(e) => setPersonName(e.target.value)}
+                    list="debt-person-suggestions"
+                  />
+                  <datalist id="debt-person-suggestions">
+                    {personSuggestions.map((n) => (
+                      <option key={n} value={n} />
+                    ))}
+                  </datalist>
+                  <div className="grid grid-cols-2 gap-2">
+                    {debtModeOptions.map((o) => (
+                      <button
+                        key={o.v}
+                        type="button"
+                        onClick={() => setDebtMode(o.v as typeof debtMode)}
+                        className={`flex items-center justify-center gap-1.5 rounded-lg border-2 px-2 py-2 text-xs font-medium transition ${
+                          debtMode === o.v
+                            ? "border-amber-500 bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+                            : "border-border text-muted-foreground"
+                        }`}
+                      >
+                        {debtMode === o.v && <Check className="h-3.5 w-3.5" />}
+                        {o.label}
+                      </button>
+                    ))}
+                  </div>
+                  {personName.trim() && (
+                    <p className="rounded-lg bg-muted/60 p-2 text-[11px] leading-5 text-muted-foreground">
+                      {debtHint[debtMode]}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="grid gap-2">
             <Label>تاریخ و ساعت</Label>
@@ -436,6 +561,12 @@ export function Transactions({ categories, accounts }: { categories: Category[];
                         <Badge variant="secondary" className="h-4 gap-1 px-1.5 text-[10px]">
                           <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: tx.category.color }} />
                           {tx.category.name}
+                        </Badge>
+                      )}
+                      {tx.debtName && (
+                        <Badge variant="outline" className="h-4 gap-1 px-1.5 text-[10px] text-amber-700 dark:text-amber-400">
+                          <HandCoins className="h-2.5 w-2.5" />
+                          {tx.debtName}
                         </Badge>
                       )}
                       {tx.bankAccount && <span>• {tx.bankAccount.name}</span>}

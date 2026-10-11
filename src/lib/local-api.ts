@@ -267,11 +267,77 @@ async function createTransaction(body: Record<string, unknown>): Promise<Transac
     date: body.date ? new Date(body.date as string).toISOString() : nowIso(),
     source: body.source === "sms" ? "sms" : "manual",
     rawSms: (body.rawSms as string) || null,
+    debtId: (body.debtId as string) || null,
+    debtName: (body.debtName as string) || null,
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
   await dbPut(STORES.transactions, tx);
   return joinTx(tx);
+}
+
+// ─── اتصال تراکنش به بدهی/طلب ───
+// mode:
+//  lend    = برداشت، به او قرض دادم → رکورد «بدهکار» (او به من بدهکار است) مبلغش زیاد می‌شود
+//  repay   = برداشت، بدهی خودم به او را دادم → رکورد «طلبکار» پرداختش زیاد می‌شود
+//  collect = واریز، طلبم از او را گرفتم → رکورد «بدهکار» پرداختش زیاد می‌شود
+//  borrow  = واریز، از او قرض گرفتم → رکورد «طلبکار» مبلغش زیاد می‌شود
+export type DebtLinkMode = "lend" | "repay" | "collect" | "borrow";
+
+async function linkTxDebt(id: string, body: Record<string, unknown>): Promise<{ tx: Transaction; debt: Debt }> {
+  const personName = typeof body.personName === "string" ? body.personName.trim() : "";
+  const mode = body.mode as DebtLinkMode;
+  if (!personName) fail("نام شخص الزامی است");
+  if (!["lend", "repay", "collect", "borrow"].includes(mode)) fail("نوع اتصال نامعتبر است");
+
+  const tx = await getOrThrow<Transaction>(STORES.transactions, id);
+  const amount = num(tx.amount);
+  if (!amount || amount <= 0) fail("مبلغ تراکنش نامعتبر است");
+
+  const debtType: "debtor" | "creditor" = mode === "lend" || mode === "collect" ? "debtor" : "creditor";
+
+  // رکورد موجود همین شخص با همین نقش؟ (بسته به بانک محلی، id مقایسه می‌شود)
+  const debts = await dbGetAll<Debt>(STORES.debts);
+  let debt = debts.find((d) => d.type === debtType && d.name === personName);
+
+  if (!debt) {
+    // رکورد جدید — اگر «پرداخت/دریافت» است یعنی بدون سابقه بدهی، همان‌جا تسویه ثبت می‌شود
+    const paying = mode === "repay" || mode === "collect";
+    debt = {
+      id: newId(),
+      name: personName,
+      type: debtType,
+      amount: paying ? amount : amount,
+      paidAmount: paying ? amount : 0,
+      phone: null,
+      description: "ثبت‌شده از تراکنش‌ها",
+      dueDate: null,
+      isSettled: paying,
+      attachments: [],
+      createdAt: nowIso(),
+      updatedAt: nowIso(),
+    };
+  } else if (mode === "lend" || mode === "borrow") {
+    // مبلغ بدهی/طلب بیشتر می‌شود — اگر تسویه‌شده بود دوباره باز می‌شود
+    debt.amount += amount;
+    debt.isSettled = debt.amount > 0 && debt.paidAmount >= debt.amount;
+    debt.updatedAt = nowIso();
+  } else {
+    // پرداخت بدهی من / دریافت طلبم — مثل addPayment با سقف مبلغ
+    debt.paidAmount = Math.max(0, Math.min(debt.amount, debt.paidAmount + amount));
+    debt.isSettled = debt.amount > 0 && debt.paidAmount >= debt.amount;
+    debt.updatedAt = nowIso();
+  }
+  await dbPut(STORES.debts, debt);
+
+  const updatedTx: Transaction = {
+    ...tx,
+    debtId: debt.id,
+    debtName: personName,
+    updatedAt: nowIso(),
+  };
+  await dbPut(STORES.transactions, updatedTx);
+  return { tx: updatedTx, debt };
 }
 
 async function updateTransaction(id: string, body: Record<string, unknown>): Promise<Transaction> {
@@ -756,6 +822,8 @@ export async function localRequest<T>(method: string, url: string, body?: unknow
     if (resource === "backup" && m === "POST") handler = table.backup.POST;
     else if (id && sub === "attachments" && resource === "debts" && m === "POST") {
       handler = (q, b) => createAttachment(id, b);
+    } else if (id && sub === "link-debt" && resource === "transactions" && m === "POST") {
+      handler = (q, b) => linkTxDebt(id, b);
     } else if (id && resource === "attachments") {
       if (m === "GET") handler = () => getAttachment(id);
       else if (m === "DELETE") handler = async () => {

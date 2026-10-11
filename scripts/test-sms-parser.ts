@@ -269,5 +269,19 @@ const jBal = judgeSms({
 });
 check("حکم: پیامک فقط-مانده → صف (بدون مبلغ تراکنش)", jBal.verdict, "queued_no_amount");
 
+// ─── به‌روزرسانی از درون برنامه: مقایسه نسخه‌ها ───
+import { toLatinDigits, parseVersion, isNewerVersion } from "../src/lib/app-update";
+
+check("ارقام فارسی → لاتین", toLatinDigits("۲.۹.۰"), "2.9.0");
+check("ارقام عربی → لاتین", toLatinDigits("٢.٩"), "2.9");
+check("پارس نسخه با v", parseVersion("v2.9.1"), [2, 9, 1]);
+check("پارس نسخه فارسی", parseVersion("۲.۹"), [2, 9]);
+check("۲.۹.۰ جدیدتر از ۲.۸.۱", isNewerVersion("v2.9.0", "2.8.1"), true);
+check("۲.۱۰.۰ جدیدتر از ۲.۹.۹", isNewerVersion("2.10.0", "2.9.9"), true);
+check("همان نسخه → جدیدتر نیست", isNewerVersion("v2.8.1", "2.8.1"), false);
+check("نسخه قدیمی‌تر → جدیدتر نیست", isNewerVersion("v2.7.9", "2.8.1"), false);
+check("طول متفاوت: ۲.۹ جدیدتر از ۲.۸.۵", isNewerVersion("2.9", "2.8.5"), true);
+check("طول متفاوت: ۲.۸ جدیدتر از ۲.۸.۱ نیست", isNewerVersion("2.8", "2.8.1"), false);
+
 console.log(`\nنتیجه: ${pass} موفق، ${failCount} ناموفق`);
 if (failCount > 0) process.exit(1);
