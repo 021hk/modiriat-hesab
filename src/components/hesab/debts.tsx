@@ -37,13 +37,9 @@ import {
   Camera,
   Phone,
   HandCoins,
-  CheckCircle2,
   ImagePlus,
   X,
   Search,
-  TrendingUp,
-  TrendingDown,
-  Scale,
   ChevronDown,
   ArrowDownLeft,
   ArrowUpRight,
@@ -598,109 +594,6 @@ function PersonCard({
   );
 }
 
-// ─── کارت «تشخیص خودکار وضعیت» — از باقی‌مانده همه اشخاص، مستقل از فیلتر و جستجو ───
-function DebtsSummary({ persons, txs }: { persons: Debt[]; txs: Transaction[] | null | undefined }) {
-  const agg = useMemo(() => {
-    let totalReceivable = 0; // مجموع طلب شما از دیگران
-    let totalPayable = 0; // مجموع بدهی شما به دیگران
-    let claimantPeople = 0;
-    let debtorPeople = 0;
-    for (const g of groupPersons(persons)) {
-      const s = groupSummary(g, txs);
-      if (s.net > 0) {
-        totalReceivable += s.net;
-        claimantPeople++;
-      } else if (s.net < 0) {
-        totalPayable += -s.net;
-        debtorPeople++;
-      }
-    }
-    return { totalReceivable, totalPayable, claimantPeople, debtorPeople };
-  }, [persons, txs]);
-
-  const net = agg.totalReceivable - agg.totalPayable;
-  const hasAny = agg.totalReceivable > 0 || agg.totalPayable > 0;
-  const status = !hasAny ? "none" : net > 0 ? "receivable" : net < 0 ? "payable" : "balanced";
-
-  const statusView =
-    status === "receivable"
-      ? {
-          icon: <TrendingUp className="h-4 w-4 shrink-0" />,
-          cls: "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300",
-          text: (
-            <>
-              <b>الان طلب دارید</b> — خالص طلب شما {formatMoneyU(net)} {currencyLabel()} است
-            </>
-          ),
-        }
-      : status === "payable"
-        ? {
-            icon: <TrendingDown className="h-4 w-4 shrink-0" />,
-            cls: "border-orange-200 bg-orange-50 text-orange-800 dark:border-orange-900 dark:bg-orange-950/40 dark:text-orange-300",
-            text: (
-              <>
-                <b>الان بدهی دارید</b> — خالص بدهی شما {formatMoneyU(-net)} {currencyLabel()} است
-              </>
-            ),
-          }
-        : status === "balanced"
-          ? {
-              icon: <Scale className="h-4 w-4 shrink-0" />,
-              cls: "border-border bg-muted text-foreground",
-              text: (
-                <>
-                  <b>الان متعادل هستید</b> — مجموع طلب و بدهی برابر است
-                </>
-              ),
-            }
-          : {
-              icon: <CheckCircle2 className="h-4 w-4 shrink-0" />,
-              cls: "border-border bg-muted text-muted-foreground",
-              text: <>فعلاً طلب یا بدهی فعالی ندارید</>,
-            };
-
-  return (
-    <Card className="py-0 overflow-hidden">
-      <CardContent className="space-y-3 p-4">
-        <div className="flex items-center gap-2">
-          <span className="text-sm font-bold">وضعیت فعلی شما</span>
-          <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">
-            تشخیص خودکار از باقی‌مانده اشخاص
-          </Badge>
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div className="rounded-xl bg-amber-50 p-3 dark:bg-amber-950/30">
-            <div className="text-xs text-muted-foreground">طلب از دیگران</div>
-            <div className="mt-0.5 text-lg font-bold text-amber-700 tabular-nums-persian dark:text-amber-300">
-              {formatMoneyU(agg.totalReceivable)}
-            </div>
-            <div className="text-[11px] text-muted-foreground">
-              {agg.claimantPeople > 0
-                ? `${formatMoney(agg.claimantPeople)} نفر به شما بدهکارند`
-                : "هیچ‌کس به شما بدهکار نیست"}
-            </div>
-          </div>
-          <div className="rounded-xl bg-orange-50 p-3 dark:bg-orange-950/30">
-            <div className="text-xs text-muted-foreground">بدهی به دیگران</div>
-            <div className="mt-0.5 text-lg font-bold text-orange-700 tabular-nums-persian dark:text-orange-300">
-              {formatMoneyU(agg.totalPayable)}
-            </div>
-            <div className="text-[11px] text-muted-foreground">
-              {agg.debtorPeople > 0
-                ? `به ${formatMoney(agg.debtorPeople)} نفر بدهکارید`
-                : "شما به هیچ‌کس بدهکار نیستید"}
-            </div>
-          </div>
-        </div>
-        <div className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm ${statusView.cls}`}>
-          {statusView.icon}
-          <span className="tabular-nums-persian">{statusView.text}</span>
-        </div>
-      </CardContent>
-    </Card>
-  );
-}
-
 export function Debts({ onQuickTx }: { onQuickTx?: (preset: { personName: string; type: "income" | "expense" }) => void }) {
   const [filter, setFilter] = useState("all");
   const [q, setQ] = useState("");
@@ -759,13 +652,6 @@ export function Debts({ onQuickTx }: { onQuickTx?: (preset: { personName: string
 
   return (
     <div className="space-y-4">
-      {/* تشخیص خودکار: الان طلب داریم یا بدهی داریم — از علامت باقی‌مانده اشخاص */}
-      {isLoading ? (
-        <Skeleton className="h-40 rounded-2xl" />
-      ) : (
-        <DebtsSummary persons={allDebts || []} txs={allTxs} />
-      )}
-
       <div className="flex flex-wrap items-center gap-2">
         <Button onClick={() => setAddOpen(true)} className="bg-emerald-700 hover:bg-emerald-800">
           <Plus className="ml-1 h-4 w-4" /> شخص جدید

@@ -79,3 +79,4 @@ tool-results/
 .cache/
 agent-ctx/
 scripts/release_via_api.py
+src/app/api
