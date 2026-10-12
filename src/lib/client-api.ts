@@ -90,6 +90,9 @@ export interface SmsLog {
   createdAt: string;
 }
 
+// قانون دسته‌بندی خودکار با مبلغ (v2.13) — مبلغ‌ها به ریال ذخیره می‌شوند
+export type { AutoCatRule } from "@/lib/auto-cat";
+
 export interface Stats {
   totalBalance: number;
   accountSummaries: {

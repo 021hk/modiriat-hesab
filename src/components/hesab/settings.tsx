@@ -1,17 +1,42 @@
 "use client";
-// تب تنظیمات — حالت روز/شب، واحد پول (ریال/تومان)، پشتیبان‌گیری، به‌روزرسانی، درباره
+// تب تنظیمات — حالت روز/شب، واحد پول (ریال/تومان)، دسته‌بندی خودکار با مبلغ، پشتیبان‌گیری، به‌روزرسانی، درباره
 import { useEffect, useState } from "react";
 import { useTheme } from "next-themes";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Sun, Moon, Monitor, Coins, Info, SunMoon, RefreshCw, Download, CheckCircle2, AlertTriangle, ExternalLink } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Sun, Moon, Monitor, Coins, Info, SunMoon, RefreshCw, Download, CheckCircle2, AlertTriangle, ExternalLink, Wand2, Plus, Pencil, Trash2 } from "lucide-react";
 import { Backup } from "@/components/hesab/backup";
 import {
   currencyLabel,
   setCurrencyUnit,
   useCurrencyUnit,
+  parseMoneyInput,
+  toStoredAmount,
+  toDisplayAmount,
+  formatMoneyPlain,
   type CurrencyUnit,
 } from "@/lib/format";
+import { flattenCategoryTree } from "@/lib/category-tree";
+import { describeRule, type AutoCatRule } from "@/lib/auto-cat";
+import { api, type Category } from "@/lib/client-api";
 import {
   fetchLatestRelease,
   isNewerVersion,
@@ -19,7 +44,7 @@ import {
   type ReleaseInfo,
 } from "@/lib/app-update";
 
-const APP_VERSION = "۲.۱۲.۱";
+const APP_VERSION = "۲.۱۳.۰";
 
 function ThemeSection() {
   const { theme, setTheme } = useTheme();
@@ -228,11 +253,326 @@ function UpdateSection() {
   );
 }
 
+// ─── دسته‌بندی خودکار با مبلغ (v2.13) ───
+// قانون = عدد مشخص یا محدوده مبلغ + دسته؛ تراکنش هزینه/درآمد بدون دسته، خودکار در دستهٔ قانون ثبت می‌شود
+
+const fmtDisplay = (rial: number) => formatMoneyPlain(toDisplayAmount(rial));
+
+function AutoCatRuleDialog({
+  editing,
+  categories,
+  onClose,
+}: {
+  editing: AutoCatRule | null;
+  categories: Category[];
+  onClose: () => void;
+}) {
+  const qc = useQueryClient();
+  const [flow, setFlow] = useState<"expense" | "income">(editing?.flow || "expense");
+  const [matchMode, setMatchMode] = useState<"exact" | "range">(editing?.match || "exact");
+  const [exact, setExact] = useState(editing?.exact ? fmtDisplay(editing.exact) : "");
+  const [min, setMin] = useState(editing?.min ? fmtDisplay(editing.min) : "");
+  const [max, setMax] = useState(editing?.max ? fmtDisplay(editing.max) : "");
+  const [categoryId, setCategoryId] = useState(editing?.categoryId || "");
+
+  const flatCats = flattenCategoryTree(categories.filter((c) => c.type === flow));
+  const chosenCat = categories.find((c) => c.id === categoryId);
+
+  const mutation = useMutation({
+    mutationFn: (body: Record<string, unknown>) =>
+      editing
+        ? api.put(`/api/auto-cat-rules/${editing.id}`, body)
+        : api.post("/api/auto-cat-rules", body),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["auto-cat-rules"] });
+      onClose();
+    },
+  });
+
+  const money = (s: string) => toStoredAmount(parseMoneyInput(s));
+  const canSave =
+    !!categoryId &&
+    (matchMode === "exact"
+      ? parseMoneyInput(exact) > 0
+      : parseMoneyInput(min) > 0 || parseMoneyInput(max) > 0);
+
+  const scopeText =
+    matchMode === "exact"
+      ? `دقیقاً ${formatMoneyPlain(parseMoneyInput(exact) || 0)} ${currencyLabel()}`
+      : parseMoneyInput(min) > 0 && parseMoneyInput(max) > 0
+        ? `از ${formatMoneyPlain(parseMoneyInput(min))} تا ${formatMoneyPlain(parseMoneyInput(max))} ${currencyLabel()}`
+        : parseMoneyInput(min) > 0
+          ? `از ${formatMoneyPlain(parseMoneyInput(min))} ${currencyLabel()} به بالا`
+          : `تا ${formatMoneyPlain(parseMoneyInput(max))} ${currencyLabel()}`;
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-md" dir="rtl">
+        <DialogHeader>
+          <DialogTitle>{editing ? "ویرایش قانون" : "قانون دسته‌بندی خودکار"}</DialogTitle>
+        </DialogHeader>
+        <div className="grid gap-4 py-2">
+          {/* نوع تراکنش */}
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setFlow("expense");
+                setCategoryId("");
+              }}
+              className={`rounded-xl border-2 p-2.5 text-sm font-medium transition ${
+                flow === "expense"
+                  ? "border-red-500 bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300"
+                  : "border-border text-muted-foreground"
+              }`}
+            >
+              هزینه (برداشت)
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setFlow("income");
+                setCategoryId("");
+              }}
+              className={`rounded-xl border-2 p-2.5 text-sm font-medium transition ${
+                flow === "income"
+                  ? "border-emerald-500 bg-emerald-50 text-emerald-700 dark:bg-emerald-950/40 dark:text-emerald-300"
+                  : "border-border text-muted-foreground"
+              }`}
+            >
+              درآمد (واریز)
+            </button>
+          </div>
+
+          {/* حالت تطبیق */}
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => setMatchMode("exact")}
+              className={`rounded-xl border-2 p-2.5 text-sm font-medium transition ${
+                matchMode === "exact"
+                  ? "border-emerald-600 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+                  : "border-border text-muted-foreground"
+              }`}
+            >
+              عدد مشخص
+              <span className="block text-[10px] opacity-70">مثلاً دقیقاً ۵۰۰٬۰۰۰</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => setMatchMode("range")}
+              className={`rounded-xl border-2 p-2.5 text-sm font-medium transition ${
+                matchMode === "range"
+                  ? "border-emerald-600 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+                  : "border-border text-muted-foreground"
+              }`}
+            >
+              محدوده
+              <span className="block text-[10px] opacity-70">مثلاً از ۱۰۰ تا ۹۹۹ هزار</span>
+            </button>
+          </div>
+
+          {matchMode === "exact" ? (
+            <div className="grid gap-2">
+              <Label>مبلغ ({currencyLabel()})</Label>
+              <Input
+                inputMode="numeric"
+                placeholder="مثلاً ۵۰۰,۰۰۰"
+                value={exact ? formatMoneyPlain(parseMoneyInput(exact)) : ""}
+                onChange={(e) => setExact(e.target.value)}
+                className="text-left text-lg font-bold tabular-nums-persian"
+                dir="ltr"
+              />
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-2">
+              <div className="grid gap-2">
+                <Label>از ({currencyLabel()})</Label>
+                <Input
+                  inputMode="numeric"
+                  placeholder="۱۰۰,۰۰۰"
+                  value={min ? formatMoneyPlain(parseMoneyInput(min)) : ""}
+                  onChange={(e) => setMin(e.target.value)}
+                  className="text-left tabular-nums-persian"
+                  dir="ltr"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label>تا ({currencyLabel()})</Label>
+                <Input
+                  inputMode="numeric"
+                  placeholder="۹۹۹,۰۰۰"
+                  value={max ? formatMoneyPlain(parseMoneyInput(max)) : ""}
+                  onChange={(e) => setMax(e.target.value)}
+                  className="text-left tabular-nums-persian"
+                  dir="ltr"
+                />
+              </div>
+            </div>
+          )}
+
+          {/* دسته هدف */}
+          <div className="grid gap-2">
+            <Label>دستهٔ مقصد</Label>
+            <Select value={categoryId} onValueChange={setCategoryId}>
+              <SelectTrigger>
+                <SelectValue placeholder="انتخاب دسته" />
+              </SelectTrigger>
+              <SelectContent>
+                {flatCats.map(({ category: c, label }) => (
+                  <SelectItem key={c.id} value={c.id}>
+                    <span className="flex items-center gap-2">
+                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: c.color }} />
+                      {label}
+                    </span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+
+          {/* پیش‌نمایش زنده */}
+          {categoryId && canSave && (
+            <p className="rounded-lg bg-emerald-50 p-2 text-[11px] leading-5 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+              هر «{flow === "expense" ? "هزینه" : "درآمد"}» با مبلغ {scopeText} خودکار در دستهٔ «{chosenCat?.name}» ثبت می‌شود — مگر خودتان دستهٔ دیگری انتخاب کنید.
+            </p>
+          )}
+          {mutation.isError && (
+            <p className="rounded-lg bg-red-50 p-2 text-[11px] text-red-700 dark:bg-red-950/40 dark:text-red-300">
+              {(mutation.error as Error).message}
+            </p>
+          )}
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            انصراف
+          </Button>
+          <Button
+            className="bg-emerald-700 hover:bg-emerald-800"
+            disabled={!canSave || mutation.isPending}
+            onClick={() =>
+              mutation.mutate({
+                flow,
+                match: matchMode,
+                exact: matchMode === "exact" ? money(exact) : null,
+                min: matchMode === "range" ? money(min) : null,
+                max: matchMode === "range" ? money(max) : null,
+                categoryId,
+              })
+            }
+          >
+            {editing ? "ذخیره تغییرات" : "افزودن قانون"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
+function AutoCatSection() {
+  const qc = useQueryClient();
+  const { data: rules, isLoading } = useQuery<AutoCatRule[]>({
+    queryKey: ["auto-cat-rules"],
+    queryFn: () => api.get("/api/auto-cat-rules"),
+  });
+  const { data: categories } = useQuery<Category[]>({
+    queryKey: ["categories"],
+    queryFn: () => api.get("/api/categories"),
+  });
+  const [dialogFor, setDialogFor] = useState<AutoCatRule | "new" | null>(null);
+
+  const toggle = useMutation({
+    mutationFn: ({ id, enabled }: { id: string; enabled: boolean }) =>
+      api.put(`/api/auto-cat-rules/${id}`, { enabled }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["auto-cat-rules"] }),
+  });
+  const del = useMutation({
+    mutationFn: (id: string) => api.del(`/api/auto-cat-rules/${id}`),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["auto-cat-rules"] }),
+  });
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-sm">
+          <Wand2 className="h-4 w-4 text-emerald-700 dark:text-emerald-400" />
+          دسته‌بندی خودکار با مبلغ
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-xs leading-5 text-muted-foreground">
+          قانون بسازید: یک عدد مشخص یا یک محدودهٔ مبلغ + دستهٔ مقصد. هر تراکنش «هزینه یا درآمد» که خودتان برایش دسته
+          انتخاب نکرده باشید، اگر مبلغش با قانون بخواند، خودکار در همان دسته ثبت می‌شود — هم ثبت دستی و هم پیامک‌های
+          بانکی. تراکنش‌های بدهی/طلب شامل قوانین نمی‌شوند.
+        </p>
+
+        {isLoading ? (
+          <p className="text-xs text-muted-foreground">در حال بارگذاری…</p>
+        ) : !rules || rules.length === 0 ? (
+          <p className="rounded-xl bg-muted/60 p-3 text-xs leading-5 text-muted-foreground">
+            هنوز قانونی نساخته‌اید. مثلاً: «هزینهٔ دقیقاً ۵۰۰ هزار تومان ← خواربار» تا خریدهای ماهانه خودکار دسته‌بندی شوند.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {rules.map((r) => {
+              const cat = (categories || []).find((c) => c.id === r.categoryId);
+              return (
+                <div key={r.id} className="flex items-center gap-2 rounded-xl border p-2.5">
+                  <Switch
+                    checked={r.enabled}
+                    onCheckedChange={(v) => toggle.mutate({ id: r.id, enabled: v })}
+                    aria-label="فعال/غیرفعال"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <div className={`text-xs font-medium ${r.enabled ? "" : "line-through opacity-60"}`}>
+                      {describeRule(r, fmtDisplay, currencyLabel())}
+                    </div>
+                    <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
+                      <span className="h-2 w-2 shrink-0 rounded-full" style={{ backgroundColor: cat?.color || "#999" }} />
+                      {cat ? cat.name : "دستهٔ حذف‌شده"}
+                      {r.label ? ` — ${r.label}` : ""}
+                    </div>
+                  </div>
+                  <Button variant="ghost" size="icon" className="h-8 w-8" onClick={() => setDialogFor(r)} aria-label="ویرایش">
+                    <Pencil className="h-4 w-4" />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8 text-red-600 hover:text-red-700"
+                    onClick={() => del.mutate(r.id)}
+                    aria-label="حذف"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              );
+            })}
+          </div>
+        )}
+
+        <Button variant="outline" size="sm" onClick={() => setDialogFor("new")}>
+          <Plus className="ml-1 h-4 w-4" /> قانون جدید
+        </Button>
+      </CardContent>
+
+      {dialogFor && (
+        <AutoCatRuleDialog
+          editing={dialogFor === "new" ? null : dialogFor}
+          categories={categories || []}
+          onClose={() => setDialogFor(null)}
+        />
+      )}
+    </Card>
+  );
+}
+
 export function Settings() {
   return (
     <div className="mx-auto max-w-2xl space-y-4">
       <ThemeSection />
       <CurrencySection />
+      <AutoCatSection />
       <Backup />
       <UpdateSection />
       <Card>

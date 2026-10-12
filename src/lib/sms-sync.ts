@@ -10,6 +10,7 @@ import { parseConfiguredSenders, senderMatches, matchAccountByRef } from "@/lib/
 import { dbGetAll, dbPut, getMeta, setMeta, newId, STORES } from "@/lib/local-db";
 import { api, type BankAccount, type SmsLog, type Transaction, type Debt } from "@/lib/client-api";
 import { autoKind, matchPersonInText, txDirection, type TxKind } from "@/lib/debt-utils";
+import { matchAutoCatRule, type AutoCatRule } from "@/lib/auto-cat";
 
 const LAST_SYNC_KEY = "smsLastSync";
 const FIRST_SYNC_DAYS = 30; // بار اول: ۳۰ روز اخیر
@@ -352,13 +353,22 @@ async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
       finalAmount > 0
     ) {
       // ثبت خودکار تراکنش
+      // دسته‌بندی خودکار با مبلغ (v2.13) — فقط برای تراکنش بدون شخص (هزینه/درآمد خالص)
+      let autoCategoryId: string | null = null;
+      const autoRules = (await getMeta<AutoCatRule[]>("autoCatRules")) || [];
+      if (autoRules.length > 0) {
+        const cats = await dbGetAll<{ id: string }>(STORES.categories);
+        const valid = new Set(cats.map((c) => c.id));
+        const ruleHit = matchAutoCatRule(finalAmount, parsed.type as "income" | "expense", autoRules, valid);
+        if (ruleHit) autoCategoryId = ruleHit.categoryId;
+      }
       const tx = {
         id: newId(),
         type: parsed.type as "income" | "expense",
         kind: parsed.type as TxKind,
         amount: finalAmount,
         purpose: parsed.bankName ? `پیامک بانک ${parsed.bankName}` : "ثبت خودکار پیامک",
-        categoryId: null,
+        categoryId: autoCategoryId,
         bankAccountId: accountId,
         date: dateIso,
         source: "sms" as const,
@@ -371,6 +381,8 @@ async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
       // اتصال خودکار به شخص اگر نام او در پیامک باشد — عنوان از باقی‌مانده فعلی شخص
       const matched = matchPersonInText(persons, text);
       if (matched) {
+        // هویت بدهی/طلب — دستهٔ خودکار برداشته می‌شود (ثبت یکتا)
+        tx.categoryId = null;
         const f = personFlow.get(matched.id);
         const net = f ? f.opening + f.out - f.in : 0;
         tx.debtId = matched.id;

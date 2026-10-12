@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -29,8 +29,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, MoreVertical, Pencil, Trash2, Search, MessageSquareText, HandCoins, Check, X } from "lucide-react";
-import { api, type Transaction, type Category, type BankAccount, type Debt } from "@/lib/client-api";
+import { Plus, MoreVertical, Pencil, Trash2, Search, MessageSquareText, HandCoins, Check, X, Download, Wand2 } from "lucide-react";
+import { api, type Transaction, type Category, type BankAccount, type Debt, type AutoCatRule } from "@/lib/client-api";
 import {
   autoKind,
   kindLabel,
@@ -42,6 +42,8 @@ import {
   type TxKind,
 } from "@/lib/debt-utils";
 import { flattenCategoryTree } from "@/lib/category-tree";
+import { matchAutoCatRule, describeRule } from "@/lib/auto-cat";
+import { buildXlsx } from "@/lib/excel-export";
 import {
   dateToJalaliParts,
   jalaliPartsToIso,
@@ -137,6 +139,47 @@ function JalaliDateTimePicker({ value, onChange }: { value: string; onChange: (i
   );
 }
 
+// ─── خروجی اکسل تراکنش‌ها (v2.13) ───
+// xlsx کاملاً آفلاین ساخته می‌شود (بدون کتابخانه خارجی) — شیت راست‌به‌چپ با سرستون بولد
+function buildTxWorkbook(txs: Transaction[], categories: Category[]): Uint8Array {
+  const catLabel = new Map<string, string>();
+  for (const { category: c, label } of flattenCategoryTree(categories)) catLabel.set(c.id, label);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const rows: (string | number)[][] = [
+    ["تاریخ", "ساعت", "نوع", "عنوان", "بابت", "مبلغ", "دسته", "حساب", "شخص", "منبع"],
+  ];
+  for (const t of txs) {
+    const p = dateToJalaliParts(new Date(t.date));
+    rows.push([
+      `${p.jy}/${pad(p.jm)}/${pad(p.jd)}`,
+      `${pad(p.hour)}:${pad(p.minute)}`,
+      txDirection(t) === "out" ? "برداشت" : "واریز",
+      kindLabel(txKindOf(t)),
+      t.purpose || "",
+      toDisplayAmount(t.amount),
+      t.categoryId ? catLabel.get(t.categoryId) || "بدون دسته" : "بدون دسته",
+      t.bankAccount?.name || "",
+      t.debtName || "",
+      t.source === "sms" ? "پیامک" : "دستی",
+    ]);
+  }
+  return buildXlsx([
+    { name: "تراکنش‌ها", rows, colWidths: [12, 8, 9, 18, 24, 14, 16, 14, 14, 8] },
+  ]);
+}
+
+function downloadBytes(bytes: Uint8Array, fileName: string, mime: string): void {
+  const blob = new Blob([bytes as BlobPart], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
 function TxDialog({
   open,
   onOpenChange,
@@ -176,6 +219,9 @@ function TxDialog({
   const [personName, setPersonName] = useState(preset?.personName || editing?.debtName || "");
   const [manualKind, setManualKind] = useState<TxKind | null>(null);
 
+  // دسته‌بندی خودکار با مبلغ (v2.13) — اگر کاربر خودش دسته انتخاب نکرده باشد
+  const [autoCatId, setAutoCatId] = useState<string | null>(null);
+
   const { data: existingDebts } = useQuery<Debt[]>({
     queryKey: ["debts"],
     queryFn: () => api.get("/api/debts"),
@@ -189,6 +235,12 @@ function TxDialog({
   });
 
   const personSuggestions = Array.from(new Set((existingDebts || []).map((d) => d.name).filter(Boolean)));
+
+  const { data: autoCatRules } = useQuery<AutoCatRule[]>({
+    queryKey: ["auto-cat-rules"],
+    queryFn: () => api.get("/api/auto-cat-rules"),
+    enabled: open,
+  });
 
   // شخص انتخابی (با نرمال‌سازی نام) + باقی‌مانده فعلی او
   const person = useMemo(() => {
@@ -272,6 +324,25 @@ function TxDialog({
   const flatCats = flattenCategoryTree(filteredCats);
   const isPersonMode = regMode === "person";
   const canSave = parseMoneyInput(amount) > 0 && (!isPersonMode || personName.trim().length > 0);
+
+  // دسته‌بندی خودکار با مبلغ: با تغییر مبلغ/نوع، اگر قانونی بخواند و کاربر دسته‌ای
+  // انتخاب نکرده باشد (یا دستهٔ قبلی هم خودکار گذاشته شده باشد)، دستهٔ قانون اعمال می‌شود
+  const autoCatRule = useMemo(() => {
+    if (editing || isPersonMode) return null;
+    const amt = toStoredAmount(parseMoneyInput(amount));
+    if (!(amt > 0)) return null;
+    const valid = new Set(categories.filter((c) => c.type === type).map((c) => c.id));
+    return matchAutoCatRule(amt, type, autoCatRules, valid);
+  }, [amount, type, autoCatRules, editing, isPersonMode, categories]);
+
+  useEffect(() => {
+    if (!autoCatRule) return;
+    setCategoryId((cur) => (!cur || cur === autoCatId ? autoCatRule.categoryId : cur));
+    setAutoCatId(autoCatRule.categoryId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [autoCatRule]);
+
+  const autoCatApplied = !editing && !isPersonMode && !!autoCatRule && (categoryId === autoCatRule.categoryId);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -381,6 +452,12 @@ function TxDialog({
                 </SelectContent>
               </Select>
               <p className="rounded-lg bg-muted/60 p-2 text-[11px] leading-5 text-muted-foreground">{willBeSentence}</p>
+              {autoCatApplied && autoCatRule && (
+                <p className="flex items-center gap-1.5 rounded-lg bg-emerald-50 px-2 py-1.5 text-[11px] leading-5 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300">
+                  <Wand2 className="h-3.5 w-3.5 shrink-0" />
+                  دسته «{categories.find((c) => c.id === autoCatRule.categoryId)?.name || "—"}» خودکار بر اساس مبلغ انتخاب شد — {describeRule(autoCatRule, (n) => formatMoneyPlain(toDisplayAmount(n)), currencyLabel())}
+                </p>
+              )}
             </div>
           ) : (
             <div className="space-y-2">
@@ -601,6 +678,23 @@ export function Transactions({ categories, accounts }: { categories: Category[];
           <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
           <Input placeholder="جستجو در بابت..." value={q} onChange={(e) => setQ(e.target.value)} className="pr-9" />
         </div>
+        {/* خروجی اکسل — همان لیستِ فعلی با فیلترها و جستجوی فعال */}
+        <Button
+          variant="outline"
+          onClick={() => {
+            if (!data || data.length === 0) return;
+            const bytes = buildTxWorkbook(data, categories);
+            downloadBytes(
+              bytes,
+              `hesab-transactions-${new Date().toISOString().slice(0, 10)}.xlsx`,
+              "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            );
+            toast({ title: "خروجی اکسل آماده شد", description: `${formatMoneyPlain(data.length)} تراکنش در فایل ذخیره شد` });
+          }}
+          disabled={!data || data.length === 0}
+        >
+          <Download className="ml-1 h-4 w-4" /> خروجی اکسل
+        </Button>
       </div>
 
       {/* لیست */}

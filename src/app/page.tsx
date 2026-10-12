@@ -45,8 +45,12 @@ function AppContent() {
   return (
     <div className="flex min-h-screen flex-col">
       <SmsBackgroundSync />
-      {/* هدر */}
-      <header className="sticky top-0 z-20 border-b bg-background/90 backdrop-blur">
+      {/* هدر — با padding-top امن (env safe-area) تا روی گوشی‌های دارای نوتش/دوربین بالای صفحه،
+          محتوای هدر زیر دوربین نرود (روی گوشی‌های بدون نوتش این مقدار صفر است) */}
+      <header
+        className="sticky top-0 z-20 border-b bg-background/90 backdrop-blur"
+        style={{ paddingTop: "env(safe-area-inset-top)" }}
+      >
         <div className="mx-auto flex max-w-6xl items-center justify-between px-4 py-3">
           <div className="flex items-center gap-2.5">
             <div className="flex h-9 w-9 items-center justify-center rounded-xl bg-gradient-to-bl from-emerald-500 to-emerald-700 text-white shadow">
@@ -122,7 +126,7 @@ function AppContent() {
       {/* فوتر */}
       <footer className="mt-auto hidden border-t bg-card py-4 lg:block">
         <div className="mx-auto max-w-6xl px-4 text-center text-xs text-muted-foreground">
-          حساب‌یار — نسخه ۲.۱۲.۱ | اپلیکیشن آفلاین — ثبت خودکار پیامک بانکی
+          حساب‌یار — نسخه ۲.۱۳.۰ | اپلیکیشن آفلاین — ثبت خودکار پیامک بانکی
         </div>
       </footer>
 

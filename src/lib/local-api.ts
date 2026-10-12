@@ -13,6 +13,7 @@ import {
 } from "@/lib/local-db";
 import { parseBankSms, type SmsParseResult } from "@/lib/sms-parser";
 import { categoryDepthById, MAX_CATEGORY_DEPTH } from "@/lib/category-tree";
+import { matchAutoCatRule, validateAutoCatRuleInput, type AutoCatRule } from "@/lib/auto-cat";
 import { jalaliMonthBounds } from "@/lib/jalali";
 import type {
   Category,
@@ -412,9 +413,23 @@ function validateTxBody(body: Record<string, unknown>): void {
   if (body.type !== "income" && body.type !== "expense") fail("نوع تراکنش نامعتبر است");
 }
 
+/** دسته‌بندی خودکار با مبلغ (v2.13) — اگر مبلغ با یک قانون بخواند، دستهٔ همان قانون برمی‌گردد */
+async function applyAutoCat(amount: number, type: "income" | "expense"): Promise<string | null> {
+  const rules = await getAutoCatRules();
+  if (rules.length === 0) return null;
+  const cats = await dbGetAll<Category>(STORES.categories);
+  const valid = new Set(cats.map((c) => c.id));
+  const rule = matchAutoCatRule(amount, type, rules, valid);
+  return rule ? rule.categoryId : null;
+}
+
 async function createTransaction(body: Record<string, unknown>): Promise<Transaction> {
   validateTxBody(body);
   const type = body.type === "income" ? "income" : "expense";
+  let categoryId = (body.categoryId as string) || null;
+  // دسته‌بندی خودکار با مبلغ (v2.13): اگر دسته‌ای داده نشده و مبلغ با یک قانون بخواند
+  // (عدد مشخص یا محدوده)، تراکنش خودکار در دستهٔ همان قانون ثبت می‌شود
+  if (!categoryId) categoryId = await applyAutoCat(num(body.amount), type);
   const tx: Transaction = {
     id: newId(),
     type,
@@ -422,7 +437,7 @@ async function createTransaction(body: Record<string, unknown>): Promise<Transac
     kind: type,
     amount: num(body.amount),
     purpose: (body.purpose as string) || null,
-    categoryId: (body.categoryId as string) || null,
+    categoryId,
     bankAccountId: (body.bankAccountId as string) || null,
     date: body.date ? new Date(body.date as string).toISOString() : nowIso(),
     source: body.source === "sms" ? "sms" : "manual",
@@ -434,6 +449,75 @@ async function createTransaction(body: Record<string, unknown>): Promise<Transac
   };
   await dbPut(STORES.transactions, tx);
   return joinTx(tx);
+}
+
+// ─── قوانین دسته‌بندی خودکار با مبلغ (v2.13) ───
+// در meta ذخیره می‌شوند (کلید autoCatRules) — ترتیب آرایه = اولویت؛ اولین قانونِ برنده اعمال می‌شود
+
+async function getAutoCatRules(): Promise<AutoCatRule[]> {
+  return (await getMeta<AutoCatRule[]>("autoCatRules")) || [];
+}
+
+async function listAutoCatRules(): Promise<AutoCatRule[]> {
+  return getAutoCatRules();
+}
+
+async function createAutoCatRule(body: Record<string, unknown>): Promise<AutoCatRule> {
+  const v = validateAutoCatRuleInput(body);
+  if (typeof v === "string") fail(v);
+  const cats = await dbGetAll<Category>(STORES.categories);
+  if (!cats.some((c) => c.id === body.categoryId)) fail("دستهٔ انتخابی پیدا نشد");
+  const rule: AutoCatRule = {
+    id: newId(),
+    label: (body.label as string) || null,
+    flow: v.flow,
+    match: v.match,
+    exact: v.exact,
+    min: v.min,
+    max: v.max,
+    categoryId: body.categoryId as string,
+    enabled: true,
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  };
+  const rules = await getAutoCatRules();
+  rules.push(rule);
+  await setMeta("autoCatRules", rules);
+  return rule;
+}
+
+async function updateAutoCatRule(id: string, body: Record<string, unknown>): Promise<AutoCatRule> {
+  const rules = await getAutoCatRules();
+  const rule = rules.find((r) => r.id === id);
+  if (!rule) notFound();
+  // فقط فعال/غیرفعال؟
+  if (Object.keys(body).length === 1 && typeof body.enabled === "boolean") {
+    rule.enabled = body.enabled;
+  } else {
+    const merged = {
+      ...rule,
+      ...body,
+    };
+    const v = validateAutoCatRuleInput(merged);
+    if (typeof v === "string") fail(v);
+    const cats = await dbGetAll<Category>(STORES.categories);
+    if (!cats.some((c) => c.id === (body.categoryId as string))) fail("دستهٔ انتخابی پیدا نشد");
+    Object.assign(rule, v, {
+      label: (body.label as string) || null,
+      categoryId: body.categoryId as string,
+    });
+  }
+  rule.updatedAt = nowIso();
+  await setMeta("autoCatRules", rules);
+  return rule;
+}
+
+async function deleteAutoCatRule(id: string): Promise<{ ok: boolean }> {
+  const rules = await getAutoCatRules();
+  const next = rules.filter((r) => r.id !== id);
+  if (next.length === rules.length) notFound();
+  await setMeta("autoCatRules", next);
+  return { ok: true };
 }
 
 // ─── اتصال تراکنش به شخص (بدهی/طلب) ───
@@ -723,13 +807,15 @@ async function updateSmsLog(id: string, body: Record<string, unknown>): Promise<
     const amount = num(body.amount);
     const type = body.type;
     if (!amount || amount <= 0 || (type !== "income" && type !== "expense")) fail("مبلغ یا نوع نامعتبر است");
+    // دسته‌بندی خودکار با مبلغ — تراکنش پیامکی هم مثل دستی خودکار دسته می‌گیرد
+    const autoCategoryId = await applyAutoCat(amount, type);
     const tx: Transaction = {
       id: newId(),
       type,
       kind: type,
       amount,
       purpose: (body.purpose as string) || null,
-      categoryId: null,
+      categoryId: autoCategoryId,
       bankAccountId: (body.bankAccountId as string) || null,
       date: body.date ? new Date(body.date as string).toISOString() : log.createdAt,
       source: "sms",
@@ -741,7 +827,12 @@ async function updateSmsLog(id: string, body: Record<string, unknown>): Promise<
     };
     await dbPut(STORES.transactions, tx);
     // تشخیص خودکار شخص از متن پیامک — اگر نام یکی از اشخاص در پیامک باشد، همان وصل می‌شود
-    await tryAutoLinkPerson(tx.id, log.rawText);
+    const personLinked = await tryAutoLinkPerson(tx.id, log.rawText);
+    // اگر به شخص وصل شد، هویت تراکنش بدهی/طلب است — دستهٔ خودکار باید برداشته شود
+    if (personLinked) {
+      const fresh = await dbGet<Transaction>(STORES.transactions, tx.id);
+      if (fresh) await dbPut(STORES.transactions, { ...fresh, categoryId: null });
+    }
     const updated: SmsLog = { ...log, status: "imported", transactionId: tx.id };
     await dbPut(STORES.smsLogs, updated);
     return updated;
@@ -1051,6 +1142,10 @@ export async function localRequest<T>(method: string, url: string, body?: unknow
         GET: () => exportBackup(),
         POST: (q, b) => importBackup(b),
       },
+      "auto-cat-rules": {
+        GET: () => listAutoCatRules(),
+        POST: (q, b) => createAutoCatRule(b),
+      },
     };
 
     if (resource === "backup" && m === "POST") handler = table.backup.POST;
@@ -1072,6 +1167,7 @@ export async function localRequest<T>(method: string, url: string, body?: unknow
         transactions: { PUT: (q, b) => updateTransaction(id, b), DELETE: () => deleteTransaction(id) },
         debts: { PUT: (q, b) => updateDebt(id, b), DELETE: () => deleteDebt(id) },
         sms: { PUT: (q, b) => updateSmsLog(id, b), DELETE: async () => { await dbDelete(STORES.smsLogs, id); return { ok: true }; } },
+        "auto-cat-rules": { PUT: (q, b) => updateAutoCatRule(id, b), DELETE: () => deleteAutoCatRule(id) },
       };
       handler = crud[resource]?.[m] || null;
     } else {
