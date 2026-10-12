@@ -51,13 +51,22 @@ async function getOrThrow<T extends { id: string }>(store: StoreName, id: string
 
 // ─── اتصال دسته/حساب به تراکنش ───
 
-async function joinTx(tx: Transaction, categories?: Category[], accounts?: BankAccount[]): Promise<Transaction> {
+async function joinTx(
+  tx: Transaction,
+  categories?: Category[],
+  accounts?: BankAccount[],
+  debts?: Debt[]
+): Promise<Transaction> {
   const cats = categories || (await dbGetAll<Category>(STORES.categories));
   const accs = accounts || (await dbGetAll<BankAccount>(STORES.bankAccounts));
+  const dbs = debts || (await dbGetAll<Debt>(STORES.debts));
+  // نوع رکورد متصل برای عنوان خودکار (پرداخت بدهی/قرض، دریافت طلب/بدهی) در لیست‌ها
+  const debtType = tx.debtId ? dbs.find((d) => d.id === tx.debtId)?.type ?? null : null;
   return {
     ...tx,
     category: tx.categoryId ? cats.find((c) => c.id === tx.categoryId) || null : null,
     bankAccount: tx.bankAccountId ? accs.find((a) => a.id === tx.bankAccountId) || null : null,
+    debtType,
   };
 }
 
@@ -240,13 +249,14 @@ async function listTransactions(query: URLSearchParams): Promise<Transaction[]> 
   }
   txs.sort((a, b) => (a.date > b.date ? -1 : 1));
   const sliced = txs.slice(0, limit);
-  // نام دسته/حساب برای نمایش در لیست (قبلاً join نمی‌شد و نشان دسته هرگز نشان داده نمی‌شد)
-  const [cats, accs] = await Promise.all([
+  // نام دسته/حساب/نوع رکورد بدهی برای نمایش در لیست (قبلاً join نمی‌شد و نشان دسته هرگز نشان داده نمی‌شد)
+  const [cats, accs, dbs] = await Promise.all([
     dbGetAll<Category>(STORES.categories),
     dbGetAll<BankAccount>(STORES.bankAccounts),
+    dbGetAll<Debt>(STORES.debts),
   ]);
   // ⚠️ joinTx هرمی است — بدون Promise.all آرایه‌ای از Promise برمی‌گشت و لیست تراکنش‌ها خالی نشان داده می‌شد (باگ نسخه ۲.۸.۰)
-  return await Promise.all(sliced.map((t) => joinTx(t, cats, accs)));
+  return await Promise.all(sliced.map((t) => joinTx(t, cats, accs, dbs)));
 }
 
 function validateTxBody(body: Record<string, unknown>): void {
@@ -606,7 +616,7 @@ async function getStats(): Promise<Stats> {
     [...txs]
       .sort((a, b) => (a.date > b.date ? -1 : 1))
       .slice(0, 8)
-      .map((t) => joinTx(t))
+      .map((t) => joinTx(t, cats, undefined, debts))
   );
 
   return {

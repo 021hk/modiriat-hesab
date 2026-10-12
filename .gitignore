@@ -75,3 +75,7 @@ assets/generated/
 tool-results/
 .z-ai-config/
 .next/
+.tools/
+.cache/
+agent-ctx/
+scripts/release_via_api.py

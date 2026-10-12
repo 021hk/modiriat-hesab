@@ -43,6 +43,7 @@ export interface Transaction {
   rawSms?: string | null;
   debtId?: string | null; // اگر این تراکنش بابت بدهی/طلب باشد — شناسه رکورد بدهی
   debtName?: string | null; // نام شخص برای نمایش سریع در لیست
+  debtType?: "debtor" | "creditor" | null; // نوع رکورد متصل — تعیین‌کننده عنوان خودکار (پرداخت بدهی/قرض، دریافت طلب/بدهی)
   createdAt: string;
   updatedAt: string;
 }

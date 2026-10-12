@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { TrendingUp, TrendingDown, Wallet, HandCoins, ScrollText, Landmark, ArrowLeft } from "lucide-react";
 import { api, type Stats } from "@/lib/client-api";
 import { formatMoney, formatMoneyU, currencyLabel, formatDateShortFa } from "@/lib/format";
+import { debtLinkLabel } from "@/lib/debt-utils";
 
 function Diff({ value, prev }: { value: number; prev: number }) {
   if (prev === 0) return null;
@@ -190,9 +191,14 @@ export function Dashboard({ onGoToTab }: { onGoToTab?: (tab: string) => void }) 
                     </div>
                     <div>
                       <div className="text-sm font-medium">
-                        {tx.purpose || tx.category?.name || tx.debtName || (tx.type === "income" ? "درآمد" : "هزینه")}
-                        {tx.debtName && (
-                          <span className="mr-1 text-[10px] text-muted-foreground">— بدهی/طلب: {tx.debtName}</span>
+                        {tx.purpose ||
+                          (debtLinkLabel(tx.type, tx.debtType ?? null)
+                            ? `${debtLinkLabel(tx.type, tx.debtType ?? null)}${tx.debtName ? ` — ${tx.debtName}` : ""}`
+                            : tx.category?.name || tx.debtName || (tx.type === "income" ? "درآمد" : "هزینه"))}
+                        {tx.debtName && debtLinkLabel(tx.type, tx.debtType ?? null) && (
+                          <span className="mr-1 text-[10px] text-muted-foreground">
+                            — {debtLinkLabel(tx.type, tx.debtType ?? null)}: {tx.debtName}
+                          </span>
                         )}
                       </div>
                       <div className="flex items-center gap-1 text-xs text-muted-foreground">
