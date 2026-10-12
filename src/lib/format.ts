@@ -92,6 +92,36 @@ export function formatMoneyU(rial: number | null | undefined, u?: CurrencyUnit):
   return formatMoney(toDisplayAmount(rial, u));
 }
 
+// ─── جستجوی فارسی ───
+// برای «جستجوی اشخاص» در بدهی/طلب — با ارقام فارسی/عربی و ی/ک عربی هم کار می‌کند
+
+/** نرمال‌سازی متن برای جستجو: ارقام فارسی/عربی → لاتین، ي/ى عربی → ی، ك عربی → ک، أ/إ/آ → ا، ة → ه، نیم‌فاصله → فاصله */
+export function normalizeSearch(raw: string): string {
+  return String(raw || "")
+    .trim()
+    .replace(/[۰-۹]/g, (d) => String("۰۱۲۳۴۵۶۷۸۹".indexOf(d)))
+    .replace(/[٠-٩]/g, (d) => String("٠١٢٣٤٥٦٧٨٩".indexOf(d)))
+    .replace(/[يى]/g, "ی")
+    .replace(/ك/g, "ک")
+    .replace(/[أإآ]/g, "ا")
+    .replace(/ة/g, "ه")
+    .replace(/[\u200c\u200e\u200f]/g, " ")
+    .replace(/\s+/g, " ")
+    .toLowerCase();
+}
+
+/** توکن‌های جستجو — هر توکن جداگانه باید در متن باشد (ترتیب کلمات مهم نیست) */
+export function searchTokens(q: string): string[] {
+  return normalizeSearch(q).split(" ").filter(Boolean);
+}
+
+/** آیا همه توکن‌های جستجو در متن (نام/شماره/توضیحات) هست‌اند؟ */
+export function matchesAllTokens(hay: string, tokens: string[]): boolean {
+  if (tokens.length === 0) return true;
+  const n = normalizeSearch(hay);
+  return tokens.every((t) => n.includes(t));
+}
+
 // ─── تاریخ ───
 
 export function formatDateFa(d: string | Date | null | undefined): string {

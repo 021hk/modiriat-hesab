@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -35,6 +35,10 @@ import {
   CheckCircle2,
   ImagePlus,
   X,
+  Search,
+  TrendingUp,
+  TrendingDown,
+  Scale,
 } from "lucide-react";
 import { api, compressImage, type Debt, type Attachment } from "@/lib/client-api";
 import {
@@ -46,6 +50,9 @@ import {
   currencyLabel,
   toDisplayAmount,
   toStoredAmount,
+  normalizeSearch,
+  searchTokens,
+  matchesAllTokens,
 } from "@/lib/format";
 
 type DebtFormState = {
@@ -512,19 +519,132 @@ function DebtDialogWrapper({ debt, open, onOpenChange }: { debt: Debt; open: boo
   return <DebtDialog open={open} onOpenChange={onOpenChange} editing={debt} />;
 }
 
+// ─── کارت «تشخیص خودکار وضعیت» ───
+// همیشه از کل رکوردها محاسبه می‌شود — مستقل از فیلترها و جستجو
+// طلب = مانده رکوردهای بدهکار (به شما بدهکارند) | بدهی = مانده رکوردهای طلبکار (شما بدهکارید)
+function DebtsSummary({ debts }: { debts: Debt[] }) {
+  const open = debts.filter((d) => !d.isSettled);
+  const rem = (d: Debt) => Math.max(0, d.amount - d.paidAmount);
+  const receivables = open.filter((d) => d.type === "debtor" && rem(d) > 0);
+  const payables = open.filter((d) => d.type === "creditor" && rem(d) > 0);
+  const totalReceivable = receivables.reduce((s, d) => s + rem(d), 0);
+  const totalPayable = payables.reduce((s, d) => s + rem(d), 0);
+  const net = totalReceivable - totalPayable;
+  const debtorPeople = new Set(receivables.map((d) => normalizeSearch(d.name))).size;
+  const creditorPeople = new Set(payables.map((d) => normalizeSearch(d.name))).size;
+
+  const hasAny = totalReceivable > 0 || totalPayable > 0;
+  const status = !hasAny ? "none" : net > 0 ? "receivable" : net < 0 ? "payable" : "balanced";
+
+  const statusView =
+    status === "receivable"
+      ? {
+          icon: <TrendingUp className="h-4 w-4 shrink-0" />,
+          cls: "border-emerald-200 bg-emerald-50 text-emerald-800 dark:border-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300",
+          text: (
+            <>
+              <b>الان طلب دارید</b> — خالص طلب شما {formatMoneyU(net)} {currencyLabel()} است
+            </>
+          ),
+        }
+      : status === "payable"
+        ? {
+            icon: <TrendingDown className="h-4 w-4 shrink-0" />,
+            cls: "border-orange-200 bg-orange-50 text-orange-800 dark:border-orange-900 dark:bg-orange-950/40 dark:text-orange-300",
+            text: (
+              <>
+                <b>الان بدهی دارید</b> — خالص بدهی شما {formatMoneyU(-net)} {currencyLabel()} است
+              </>
+            ),
+          }
+        : status === "balanced"
+          ? {
+              icon: <Scale className="h-4 w-4 shrink-0" />,
+              cls: "border-border bg-muted text-foreground",
+              text: (
+                <>
+                  <b>الان متعادل هستید</b> — مجموع طلب و بدهی برابر است
+                </>
+              ),
+            }
+          : {
+              icon: <CheckCircle2 className="h-4 w-4 shrink-0" />,
+              cls: "border-border bg-muted text-muted-foreground",
+              text: <>فعلاً طلب یا بدهی فعالی ندارید — همه چیز تسویه شده است</>,
+            };
+
+  return (
+    <Card className="py-0 overflow-hidden">
+      <CardContent className="space-y-3 p-4">
+        <div className="flex items-center gap-2">
+          <span className="text-sm font-bold">وضعیت فعلی شما</span>
+          <Badge variant="outline" className="text-[10px] font-normal text-muted-foreground">
+            تشخیص خودکار
+          </Badge>
+        </div>
+        <div className="grid grid-cols-2 gap-3">
+          <div className="rounded-xl bg-amber-50 p-3 dark:bg-amber-950/30">
+            <div className="text-xs text-muted-foreground">طلب از دیگران</div>
+            <div className="mt-0.5 text-lg font-bold text-amber-700 tabular-nums-persian dark:text-amber-300">
+              {formatMoneyU(totalReceivable)}
+            </div>
+            <div className="text-[11px] text-muted-foreground">
+              {debtorPeople > 0
+                ? `${formatMoney(debtorPeople)} نفر به شما بدهکارند`
+                : "هیچ‌کس به شما بدهکار نیست"}
+            </div>
+          </div>
+          <div className="rounded-xl bg-orange-50 p-3 dark:bg-orange-950/30">
+            <div className="text-xs text-muted-foreground">بدهی به دیگران</div>
+            <div className="mt-0.5 text-lg font-bold text-orange-700 tabular-nums-persian dark:text-orange-300">
+              {formatMoneyU(totalPayable)}
+            </div>
+            <div className="text-[11px] text-muted-foreground">
+              {creditorPeople > 0
+                ? `به ${formatMoney(creditorPeople)} نفر بدهکارید`
+                : "شما به هیچ‌کس بدهکار نیستید"}
+            </div>
+          </div>
+        </div>
+        <div className={`flex items-center gap-2 rounded-xl border px-3 py-2 text-sm ${statusView.cls}`}>
+          {statusView.icon}
+          <span className="tabular-nums-persian">{statusView.text}</span>
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 export function Debts() {
   const [filter, setFilter] = useState("all");
+  const [q, setQ] = useState("");
   const [addOpen, setAddOpen] = useState(false);
 
-  const params = new URLSearchParams();
-  if (filter === "debtor" || filter === "creditor") params.set("type", filter);
-  if (filter === "settled") params.set("status", "settled");
-  if (filter === "open") params.set("status", "open");
-
-  const { data, isLoading } = useQuery<Debt[]>({
-    queryKey: ["debts", filter],
-    queryFn: () => api.get(`/api/debts?${params.toString()}`),
+  // همه رکوردها یک‌بار خوانده می‌شود؛ فیلتر و جستجو سمت کلاینت اعمال می‌شود (داده محلی و کم‌حجم است)
+  // کارت تشخیص خودکار هم از همین داده کامل محاسبه می‌شود
+  const { data: allDebts, isLoading } = useQuery<Debt[]>({
+    queryKey: ["debts", "all"],
+    queryFn: () => api.get("/api/debts"),
   });
+
+  const tokens = useMemo(() => searchTokens(q), [q]);
+
+  const data = useMemo(() => {
+    let list = allDebts || [];
+    if (tokens.length > 0) {
+      // جستجوی اشخاص: نام + شماره + توضیحات (با نرمال‌سازی فارسی: ي/ك عربی، ارقام فارسی/عربی)
+      list = list.filter((d) =>
+        matchesAllTokens([d.name, d.phone, d.description].filter(Boolean).join(" "), tokens)
+      );
+    } else if (filter === "debtor" || filter === "creditor") {
+      list = list.filter((d) => d.type === filter);
+    } else if (filter === "settled") {
+      list = list.filter((d) => d.isSettled);
+    } else if (filter === "open") {
+      list = list.filter((d) => !d.isSettled);
+    }
+    return list;
+  }, [allDebts, filter, tokens]);
 
   const filters = [
     { v: "all", label: "همه" },
@@ -536,6 +656,13 @@ export function Debts() {
 
   return (
     <div className="space-y-4">
+      {/* تشخیص خودکار: الان طلب داریم یا بدهی داریم */}
+      {isLoading ? (
+        <Skeleton className="h-40 rounded-2xl" />
+      ) : (
+        <DebtsSummary debts={allDebts || []} />
+      )}
+
       <div className="flex flex-wrap items-center gap-2">
         <Button onClick={() => setAddOpen(true)} className="bg-emerald-700 hover:bg-emerald-800">
           <Plus className="ml-1 h-4 w-4" /> بدهی جدید
@@ -553,7 +680,33 @@ export function Debts() {
             </button>
           ))}
         </div>
+        {/* جستجوی اشخاص — نام، شماره تماس و توضیحات */}
+        <div className="relative w-full sm:w-auto sm:min-w-48 sm:flex-1">
+          <Search className="absolute right-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+          <Input
+            placeholder="جستجوی اشخاص — نام، شماره یا توضیحات..."
+            value={q}
+            onChange={(e) => setQ(e.target.value)}
+            className="pr-9 pl-9"
+          />
+          {q && (
+            <button
+              type="button"
+              aria-label="پاک کردن جستجو"
+              onClick={() => setQ("")}
+              className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
       </div>
+
+      {tokens.length > 0 && data.length > 0 && (
+        <p className="-mt-2 text-xs text-muted-foreground">
+          {formatMoney(data.length)} نتیجه برای «{q.trim()}»
+        </p>
+      )}
 
       {isLoading ? (
         <div className="space-y-3">
@@ -561,17 +714,32 @@ export function Debts() {
             <Skeleton key={i} className="h-36 rounded-2xl" />
           ))}
         </div>
-      ) : !data || data.length === 0 ? (
-        <Card>
-          <CardContent className="flex flex-col items-center gap-2 py-12 text-center">
-            <HandCoins className="h-10 w-10 text-[rgba(90,103,95,0.4)]" />
-            <p className="font-medium">بدهی‌ای ثبت نشده</p>
-            <p className="text-sm text-muted-foreground">بدهکاران و طلبکاران خود را با عکس رسید ثبت کنید</p>
-            <Button onClick={() => setAddOpen(true)} className="mt-2 bg-emerald-700 hover:bg-emerald-800">
-              <Plus className="ml-1 h-4 w-4" /> ثبت بدهی
-            </Button>
-          </CardContent>
-        </Card>
+      ) : data.length === 0 ? (
+        tokens.length > 0 ? (
+          <Card>
+            <CardContent className="flex flex-col items-center gap-2 py-12 text-center">
+              <Search className="h-10 w-10 text-[rgba(90,103,95,0.4)]" />
+              <p className="font-medium">شخصی پیدا نشد</p>
+              <p className="text-sm text-muted-foreground">
+                جستجو روی نام، شماره تماس و توضیحات اعمال می‌شود — با کلمه دیگری امتحان کنید
+              </p>
+              <Button variant="outline" onClick={() => setQ("")} className="mt-2">
+                پاک کردن جستجو
+              </Button>
+            </CardContent>
+          </Card>
+        ) : (
+          <Card>
+            <CardContent className="flex flex-col items-center gap-2 py-12 text-center">
+              <HandCoins className="h-10 w-10 text-[rgba(90,103,95,0.4)]" />
+              <p className="font-medium">بدهی‌ای ثبت نشده</p>
+              <p className="text-sm text-muted-foreground">بدهکاران و طلبکاران خود را با عکس رسید ثبت کنید</p>
+              <Button onClick={() => setAddOpen(true)} className="mt-2 bg-emerald-700 hover:bg-emerald-800">
+                <Plus className="ml-1 h-4 w-4" /> ثبت بدهی
+              </Button>
+            </CardContent>
+          </Card>
+        )
       ) : (
         <div className="grid gap-3 lg:grid-cols-2">
           {data.map((d) => (

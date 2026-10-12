@@ -45,6 +45,20 @@ const txs = [
 for (const c of [cFood, cFoodSub, cFoodSub2, cFoodSub3, cSalary]) await put(db, "categories", c);
 await put(db, "bankAccounts", acc);
 for (const t of txs) await put(db, "transactions", t);
-const out = { cats: (await getAll(db, "categories")).length, accs: (await getAll(db, "bankAccounts")).length, txs: (await getAll(db, "transactions")).length };
+
+// debts: ۲ رکورد فعال (یک بدهکار + یک طلبکار) + ۱ تسویه‌شده — برای تب بدهی/طلب و جستجوی اشخاص
+const debts = [
+  { id: "debt-1", name: "علی محمدی", type: "debtor", amount: 2000000, paidAmount: 0, phone: "09121234567", description: "قرض خرید لپ‌تاپ", dueDate: null, isSettled: false, attachments: [], createdAt: iso(now-5e7), updatedAt: iso(now-5e7) },
+  { id: "debt-2", name: "علی رضایی", type: "creditor", amount: 1500000, paidAmount: 500000, phone: null, description: "قرض گرفته بودم", dueDate: null, isSettled: false, attachments: [], createdAt: iso(now-4e7), updatedAt: iso(now-4e7) },
+  { id: "debt-3", name: "رضا کریمی", type: "debtor", amount: 800000, paidAmount: 800000, phone: null, description: null, dueDate: null, isSettled: true, attachments: [], createdAt: iso(now-3e7), updatedAt: iso(now-3e7) },
+];
+for (const d of debts) await put(db, "debts", d);
+
+const out = {
+  cats: (await getAll(db, "categories")).length,
+  accs: (await getAll(db, "bankAccounts")).length,
+  txs: (await getAll(db, "transactions")).length,
+  debts: (await getAll(db, "debts")).length,
+};
 return out;
 })()
