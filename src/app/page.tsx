@@ -28,6 +28,7 @@ const TABS = [
 function AppContent() {
   const [tab, setTab] = useState("dashboard");
   const [txOpen, setTxOpen] = useState(false);
+  const [txPreset, setTxPreset] = useState<{ personName?: string; type?: "income" | "expense" } | null>(null);
 
   // همگام‌سازی پس‌زمینه پیامک‌های بانکی — باز شدن برنامه، بازگشت از پس‌زمینه، پیامک زنده (در هر تب)
   // منطق در SmsBackgroundSync است؛ اینجا فقط نصب می‌شود.
@@ -86,7 +87,7 @@ function AppContent() {
             <Transactions categories={categories || []} accounts={accounts || []} />
           </TabsContent>
           <TabsContent value="debts">
-            <Debts />
+            <Debts onQuickTx={(p) => { setTxPreset(p); setTxOpen(true); }} />
           </TabsContent>
           <TabsContent value="banks">
             <Banks onOpenTxDialog={() => setTxOpen(true)} />
@@ -121,13 +122,22 @@ function AppContent() {
       {/* فوتر */}
       <footer className="mt-auto hidden border-t bg-card py-4 lg:block">
         <div className="mx-auto max-w-6xl px-4 text-center text-xs text-muted-foreground">
-          حساب‌یار — نسخه ۲.۱۱.۰ | اپلیکیشن آفلاین — ثبت خودکار پیامک بانکی
+          حساب‌یار — نسخه ۲.۱۲.۰ | اپلیکیشن آفلاین — ثبت خودکار پیامک بانکی
         </div>
       </footer>
 
       {/* دیالوگ تراکنش سریع */}
       {txOpen && (
-        <TxDialog open={txOpen} onOpenChange={setTxOpen} categories={categories || []} accounts={accounts || []} />
+        <TxDialog
+          open={txOpen}
+          onOpenChange={(v) => {
+            setTxOpen(v);
+            if (!v) setTxPreset(null);
+          }}
+          categories={categories || []}
+          accounts={accounts || []}
+          preset={txPreset}
+        />
       )}
     </div>
   );

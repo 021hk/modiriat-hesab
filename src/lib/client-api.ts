@@ -1,4 +1,8 @@
 // انواع داده مشترک
+import type { TxKind } from "@/lib/debt-utils";
+
+export type { TxKind } from "@/lib/debt-utils";
+
 export interface Category {
   id: string;
   name: string;
@@ -31,7 +35,8 @@ export interface BankAccount {
 
 export interface Transaction {
   id: string;
-  type: "income" | "expense";
+  type: "income" | "expense"; // جهت پول: income = ورود (واریز)، expense = خروج (برداشت)
+  kind?: TxKind | null; // هویت یکتای تراکنش — هزینه | درآمد | پرداخت بدهی | پرداخت قرض | دریافت طلب | دریافت بدهی
   amount: number;
   purpose?: string | null;
   categoryId?: string | null;
@@ -41,9 +46,9 @@ export interface Transaction {
   date: string;
   source: "manual" | "sms";
   rawSms?: string | null;
-  debtId?: string | null; // اگر این تراکنش بابت بدهی/طلب باشد — شناسه رکورد بدهی
+  debtId?: string | null; // اگر بابت شخص (بدهی/طلب) باشد — شناسه رکورد شخص
   debtName?: string | null; // نام شخص برای نمایش سریع در لیست
-  debtType?: "debtor" | "creditor" | null; // نوع رکورد متصل — تعیین‌کننده عنوان خودکار (پرداخت بدهی/قرض، دریافت طلب/بدهی)
+  debtType?: "debtor" | "creditor" | null; // (قدیمی) نوع رکورد متصل — فقط برای سازگاری داده‌های قبل
   createdAt: string;
   updatedAt: string;
 }
@@ -59,13 +64,14 @@ export interface Attachment {
 export interface Debt {
   id: string;
   name: string;
-  type: "debtor" | "creditor";
-  amount: number;
-  paidAmount: number;
+  type: "debtor" | "creditor"; // (قدیمی) فقط برای سازگاری — در مدل جدید معیار نیست
+  amount: number; // (قدیمی) استفاده نمی‌شود — گردش از تراکنش‌ها محاسبه می‌شود
+  paidAmount: number; // (قدیمی) استفاده نمی‌شود
+  openingBalance?: number; // مانده اولیه شخص به ریال — مثبت = طلب اولیه (او بدهکار است)، منفی = بدهی اولیه
   phone?: string | null;
   description?: string | null;
   dueDate?: string | null;
-  isSettled: boolean;
+  isSettled: boolean; // (قدیمی) استفاده نمی‌شود — وضعیت از علامت باقی‌مانده مشخص می‌شود
   attachments: Attachment[];
   createdAt: string;
   updatedAt: string;

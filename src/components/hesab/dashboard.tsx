@@ -7,7 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { TrendingUp, TrendingDown, Wallet, HandCoins, ScrollText, Landmark, ArrowLeft } from "lucide-react";
 import { api, type Stats } from "@/lib/client-api";
 import { formatMoney, formatMoneyU, currencyLabel, formatDateShortFa } from "@/lib/format";
-import { debtLinkLabel } from "@/lib/debt-utils";
+import { kindLabel, txKindOf } from "@/lib/debt-utils";
 
 function Diff({ value, prev }: { value: number; prev: number }) {
   if (prev === 0) return null;
@@ -108,25 +108,25 @@ export function Dashboard({ onGoToTab }: { onGoToTab?: (tab: string) => void }) 
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-muted-foreground">از بدهکاران طلب دارم</span>
+              <span className="text-xs text-muted-foreground">از دیگران طلب دارم</span>
               <div className="rounded-full bg-amber-100 p-1.5 text-amber-700 dark:bg-amber-900/40 dark:text-amber-300">
                 <HandCoins className="h-4 w-4" />
               </div>
             </div>
             <div className="mt-2 text-lg font-bold text-amber-700 dark:text-amber-300 tabular-nums-persian">{formatMoneyU(data.totalDueToMe)}</div>
-            <span className="text-xs text-muted-foreground">{data.debtorCount} بدهکار فعال</span>
+            <span className="text-xs text-muted-foreground">{formatMoney(data.debtorCount)} نفر به شما بدهکارند</span>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
-              <span className="text-xs text-muted-foreground">به طلبکاران بدهکارم</span>
+              <span className="text-xs text-muted-foreground">به دیگران بدهکارم</span>
               <div className="rounded-full bg-orange-100 p-1.5 text-orange-700 dark:bg-orange-900/40 dark:text-orange-300">
                 <ScrollText className="h-4 w-4" />
               </div>
             </div>
             <div className="mt-2 text-lg font-bold text-orange-700 dark:text-orange-300 tabular-nums-persian">{formatMoneyU(data.totalIOwe)}</div>
-            <span className="text-xs text-muted-foreground">{data.creditorCount} طلبکار فعال</span>
+            <span className="text-xs text-muted-foreground">به {formatMoney(data.creditorCount)} نفر بدهکارید</span>
           </CardContent>
         </Card>
       </div>
@@ -177,7 +177,15 @@ export function Dashboard({ onGoToTab }: { onGoToTab?: (tab: string) => void }) 
             {data.recentTx.length === 0 ? (
               <p className="py-6 text-center text-sm text-muted-foreground">تراکنشی ثبت نشده است</p>
             ) : (
-              data.recentTx.map((tx) => (
+              data.recentTx.map((tx) => {
+                const kind = txKindOf(tx);
+                const isPersonTx = Boolean(tx.debtId);
+                const rowTitle =
+                  tx.purpose ||
+                  (isPersonTx
+                    ? `${kindLabel(kind)}${tx.debtName ? ` — ${tx.debtName}` : ""}`
+                    : tx.category?.name || (tx.type === "income" ? "درآمد" : "هزینه"));
+                return (
                 <div key={tx.id} className="flex items-center justify-between rounded-lg border p-2.5">
                   <div className="flex items-center gap-2.5">
                     <div
@@ -190,19 +198,14 @@ export function Dashboard({ onGoToTab }: { onGoToTab?: (tab: string) => void }) 
                       {tx.type === "income" ? "+" : "-"}
                     </div>
                     <div>
-                      <div className="text-sm font-medium">
-                        {tx.purpose ||
-                          (debtLinkLabel(tx.type, tx.debtType ?? null)
-                            ? `${debtLinkLabel(tx.type, tx.debtType ?? null)}${tx.debtName ? ` — ${tx.debtName}` : ""}`
-                            : tx.category?.name || tx.debtName || (tx.type === "income" ? "درآمد" : "هزینه"))}
-                        {tx.debtName && debtLinkLabel(tx.type, tx.debtType ?? null) && (
-                          <span className="mr-1 text-[10px] text-muted-foreground">
-                            — {debtLinkLabel(tx.type, tx.debtType ?? null)}: {tx.debtName}
-                          </span>
-                        )}
-                      </div>
+                      <div className="text-sm font-medium">{rowTitle}</div>
                       <div className="flex items-center gap-1 text-xs text-muted-foreground">
                         {formatDateShortFa(tx.date)}
+                        {isPersonTx && (
+                          <Badge variant="outline" className="h-4 border-amber-300 px-1 text-[10px] text-amber-700 dark:border-amber-800 dark:text-amber-400">
+                            {kindLabel(kind)}{tx.debtName ? ` — ${tx.debtName}` : ""}
+                          </Badge>
+                        )}
                         {tx.source === "sms" && (
                           <Badge variant="outline" className="h-4 px-1 text-[10px]">
                             پیامکی
@@ -219,7 +222,8 @@ export function Dashboard({ onGoToTab }: { onGoToTab?: (tab: string) => void }) 
                     {tx.type === "income" ? "+" : "−"} {formatMoneyU(tx.amount)}
                   </span>
                 </div>
-              ))
+                );
+              })
             )}
           </CardContent>
         </Card>

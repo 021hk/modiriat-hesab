@@ -29,15 +29,17 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useToast } from "@/hooks/use-toast";
-import { Plus, MoreVertical, Pencil, Trash2, Search, MessageSquareText, HandCoins, Check } from "lucide-react";
+import { Plus, MoreVertical, Pencil, Trash2, Search, MessageSquareText, HandCoins, Check, X } from "lucide-react";
 import { api, type Transaction, type Category, type BankAccount, type Debt } from "@/lib/client-api";
 import {
-  autoDetectDebtMode,
-  debtLinkLabel,
-  debtModeSentence,
+  autoKind,
+  kindLabel,
+  kindSentence,
   personKey,
-  sideOfMode,
-  type DebtLinkMode,
+  personKindsOfDirection,
+  txDirection,
+  txKindOf,
+  type TxKind,
 } from "@/lib/debt-utils";
 import { flattenCategoryTree } from "@/lib/category-tree";
 import {
@@ -47,7 +49,6 @@ import {
   JALALI_MONTH_NAMES,
 } from "@/lib/jalali";
 import {
-  formatMoney,
   formatMoneyPlain,
   formatMoneyU,
   parseMoneyInput,
@@ -149,7 +150,7 @@ function TxDialog({
   editing?: Transaction | null;
   categories: Category[];
   accounts: BankAccount[];
-  preset?: { type?: "income" | "expense"; amount?: number; purpose?: string; bankAccountId?: string } | null;
+  preset?: { type?: "income" | "expense"; amount?: number; purpose?: string; bankAccountId?: string; personName?: string } | null;
 }) {
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -166,74 +167,92 @@ function TxDialog({
   const [bankAccountId, setBankAccountId] = useState(preset?.bankAccountId || editing?.bankAccountId || "");
   const [dateIso, setDateIso] = useState(editing?.date || new Date().toISOString());
 
-  // ─── بدهی/طلب: عنوان خودکار — برداشت = پرداخت بدهی یا پرداخت قرض، واریز = دریافت طلب یا دریافت بدهی ───
-  // حالت از وضعیت فعلی شخص تشخیص داده می‌شود؛ فقط با «تغییر دستی» قابل عبور است
-  const linkedToDebt = Boolean(editing?.debtId); // تراکنش متصل — جلوگیری از دوبار‌شماری
-  const [debtEnabled, setDebtEnabled] = useState(false);
-  const [personName, setPersonName] = useState("");
-  const [manualMode, setManualMode] = useState<DebtLinkMode | null>(null);
+  // ─── ثبت یکتا: هر تراکنش فقط «یک» هویت دارد ───
+  // plain = هزینه/درآمد خالص (در آمار مالی حساب می‌شود)
+  // person = بابت شخص (بدهی/طلب) — عنوانش از علامت باقی‌مانده همان شخص خودکار تشخیص داده می‌شود
+  const [regMode, setRegMode] = useState<"plain" | "person">(
+    preset?.personName || editing?.debtId ? "person" : "plain"
+  );
+  const [personName, setPersonName] = useState(preset?.personName || editing?.debtName || "");
+  const [manualKind, setManualKind] = useState<TxKind | null>(null);
+
   const { data: existingDebts } = useQuery<Debt[]>({
     queryKey: ["debts"],
     queryFn: () => api.get("/api/debts"),
     enabled: open,
   });
-  const personSuggestions = Array.from(
-    new Set((existingDebts || []).map((d) => d.name).filter(Boolean))
-  );
+  // همه تراکنش‌ها — برای محاسبه باقی‌مانده فعلی شخص (مبنای تشخیص خودکار عنوان)
+  const { data: allTxs } = useQuery<Transaction[]>({
+    queryKey: ["transactions", "all"],
+    queryFn: () => api.get("/api/transactions?limit=500"),
+    enabled: open && regMode === "person",
+  });
 
-  // رکوردهای همین شخص (با نرمال‌سازی نام) — مبنای تشخیص خودکار
-  const personRecords = useMemo(() => {
+  const personSuggestions = Array.from(new Set((existingDebts || []).map((d) => d.name).filter(Boolean)));
+
+  // شخص انتخابی (با نرمال‌سازی نام) + باقی‌مانده فعلی او
+  const person = useMemo(() => {
     const key = personKey(personName);
-    if (!key) return [];
-    return (existingDebts || []).filter((d) => personKey(d.name) === key);
+    if (!key) return null;
+    return (existingDebts || []).find((d) => personKey(d.name) === key) || null;
   }, [existingDebts, personName]);
 
-  const autoMode = autoDetectDebtMode(type, personRecords);
-  // حالت دستیِ ناسازگار با نوع تراکنش نادیده گرفته می‌شود
-  const validModes: DebtLinkMode[] = type === "expense" ? ["lend", "repay"] : ["collect", "borrow"];
-  const debtMode: DebtLinkMode = manualMode && validModes.includes(manualMode) ? manualMode : autoMode;
+  const personNet = useMemo(() => {
+    if (!person) return 0;
+    let out = 0;
+    let inn = 0;
+    for (const t of allTxs || []) {
+      if (t.debtId !== person.id || t.id === editing?.id) continue;
+      if (txDirection(t) === "out") out += t.amount || 0;
+      else inn += t.amount || 0;
+    }
+    return (person.openingBalance || 0) + out - inn;
+  }, [person, allTxs, editing]);
+
+  const direction: "out" | "in" = type === "expense" ? "out" : "in";
+  const autoKindVal = autoKind(direction, personNet);
+  // انتخاب دستی فقط از انواع شخص‌دارِ همین جهت؛ با تغییر نوع یا شخص، دوباره خودکار
+  const validPersonKinds = personKindsOfDirection(direction);
+  const finalKind: TxKind = manualKind && validPersonKinds.includes(manualKind) ? manualKind : autoKindVal;
 
   const switchType = (t: "income" | "expense") => {
     setType(t);
-    setManualMode(null); // با تغییر نوع، دوباره تشخیص خودکار
+    setManualKind(null);
+  };
+  const switchMode = (m: "plain" | "person") => {
+    setRegMode(m);
+    setManualKind(null);
   };
   const changePersonName = (v: string) => {
     setPersonName(v);
-    setManualMode(null); // با تغییر شخص، دوباره تشخیص خودکار
+    setManualKind(null);
   };
 
   const displayAmount = formatMoneyU(toStoredAmount(parseMoneyInput(amount)));
-  const debtSentence = debtModeSentence(debtMode, personName.trim(), displayAmount, currencyLabel());
-  const willBeLabel = debtLinkLabel(type, sideOfMode(debtMode));
-  const debtModeOptions: { v: DebtLinkMode; label: string }[] =
-    type === "expense"
-      ? [
-          { v: "lend", label: "پرداخت قرض" },
-          { v: "repay", label: "پرداخت بدهی" },
-        ]
-      : [
-          { v: "collect", label: "دریافت طلب" },
-          { v: "borrow", label: "دریافت بدهی" },
-        ];
+  const willBeSentence = kindSentence(regMode === "person" ? finalKind : direction === "out" ? "expense" : "income", personName.trim(), displayAmount, currencyLabel());
+  const personKindOptions: { v: TxKind; label: string }[] = validPersonKinds.map((k) => ({ v: k, label: kindLabel(k) }));
 
   const mutation = useMutation({
     mutationFn: async () => {
-      const body = {
+      const isPerson = regMode === "person" && personName.trim().length > 0;
+      const body: Record<string, unknown> = {
         type,
         amount: toStoredAmount(parseMoneyInput(amount)),
         purpose: purpose || null,
-        categoryId: categoryId === "none" ? null : categoryId || null,
+        categoryId: isPerson ? null : categoryId === "none" ? null : categoryId || null,
         bankAccountId: bankAccountId === "none" ? null : bankAccountId || null,
         date: dateIso,
       };
+      // در حالت «هزینه/درآمد» اتصال به شخص حذف می‌شود (هویت یکتا)
+      if (!isPerson) body.debtId = null;
       const saved: Transaction = editing
         ? await api.put<Transaction>(`/api/transactions/${editing.id}`, body)
         : await api.post<Transaction>("/api/transactions", body);
-      // اتصال به بدهی/طلب بعد از ثبت خود تراکنش (در ویرایشِ تراکنشِ متصل، دست نمی‌زنیم تا دوبار شمرده نشود)
-      if (debtEnabled && personName.trim() && !linkedToDebt) {
+      // اتصال به شخص بعد از ثبت — kind نهایی در سرور از باقی‌مانده شخص تشخیص داده می‌شود
+      if (isPerson) {
         await api.post(`/api/transactions/${saved.id}/link-debt`, {
           personName: personName.trim(),
-          mode: debtMode,
+          ...(manualKind && validPersonKinds.includes(manualKind) ? { kind: manualKind } : {}),
         });
       }
       return saved;
@@ -251,6 +270,8 @@ function TxDialog({
   const filteredCats = categories.filter((c) => c.type === type);
   // زیرشاخه‌ها با تودرتو و ترتیب درختی در فهرست انتخاب دیده می‌شوند
   const flatCats = flattenCategoryTree(filteredCats);
+  const isPersonMode = regMode === "person";
+  const canSave = parseMoneyInput(amount) > 0 && (!isPersonMode || personName.trim().length > 0);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -259,7 +280,7 @@ function TxDialog({
           <DialogTitle>{editing ? "ویرایش تراکنش" : "ثبت تراکنش جدید"}</DialogTitle>
         </DialogHeader>
         <div className="grid gap-4 py-2 max-h-[75dvh] overflow-y-auto pl-1">
-          {/* نوع */}
+          {/* جهت پول */}
           <div className="grid grid-cols-2 gap-2">
             <button
               type="button"
@@ -270,7 +291,7 @@ function TxDialog({
                   : "border-border text-muted-foreground"
               }`}
             >
-              − برداشت / هزینه
+              − برداشت (خروج پول)
             </button>
             <button
               type="button"
@@ -281,7 +302,7 @@ function TxDialog({
                   : "border-border text-muted-foreground"
               }`}
             >
-              + واریز / درآمد
+              + واریز (ورود پول)
             </button>
           </div>
 
@@ -302,6 +323,34 @@ function TxDialog({
             />
           </div>
 
+          {/* نوع ثبت — فقط یکی: هزینه/درآمد یا بدهی/طلب */}
+          <div className="grid grid-cols-2 gap-2">
+            <button
+              type="button"
+              onClick={() => switchMode("plain")}
+              className={`rounded-xl border-2 p-3 text-sm font-medium transition ${
+                !isPersonMode
+                  ? "border-slate-500 bg-slate-100 text-slate-800 dark:bg-slate-900/60 dark:text-slate-200"
+                  : "border-border text-muted-foreground"
+              }`}
+            >
+              {type === "expense" ? "هزینه" : "درآمد"}
+              <span className="block text-[10px] opacity-70">در آمار هزینه/درآمد حساب می‌شود</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => switchMode("person")}
+              className={`rounded-xl border-2 p-3 text-sm font-medium transition ${
+                isPersonMode
+                  ? "border-amber-500 bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+                  : "border-border text-muted-foreground"
+              }`}
+            >
+              بدهی یا طلب
+              <span className="block text-[10px] opacity-70">وصل به شخص — عنوان خودکار</span>
+            </button>
+          </div>
+
           <div className="grid gap-2">
             <Label htmlFor="purpose">بابت چه چیزی؟ (اختیاری)</Label>
             <Input
@@ -312,7 +361,7 @@ function TxDialog({
             />
           </div>
 
-          <div className="grid grid-cols-2 gap-3">
+          {!isPersonMode ? (
             <div className="grid gap-2">
               <Label>دسته‌بندی</Label>
               <Select value={categoryId} onValueChange={setCategoryId}>
@@ -331,8 +380,100 @@ function TxDialog({
                   ))}
                 </SelectContent>
               </Select>
+              <p className="rounded-lg bg-muted/60 p-2 text-[11px] leading-5 text-muted-foreground">{willBeSentence}</p>
             </div>
-            <div className="grid gap-2">
+          ) : (
+            <div className="space-y-2">
+              <Label>شخص (بدهکار یا طلبکار)</Label>
+              <Input
+                placeholder="نام شخص (مثلاً: علی)"
+                value={personName}
+                onChange={(e) => changePersonName(e.target.value)}
+                list="tx-person-suggestions"
+              />
+              <datalist id="tx-person-suggestions">
+                {personSuggestions.map((n) => (
+                  <option key={n} value={n} />
+                ))}
+              </datalist>
+              {personName.trim() ? (
+                <div className="space-y-2">
+                  {/* عنوان ثبت — خودکار از علامت باقی‌مانده شخص؛ فقط با «تشخیص دستی» قابل تغییر */}
+                  <div className="flex items-center justify-between gap-2 rounded-lg border-2 border-amber-400 bg-amber-50 px-2.5 py-2 dark:border-amber-700 dark:bg-amber-950/40">
+                    <span className="flex items-center gap-1.5 text-xs font-bold text-amber-800 dark:text-amber-300">
+                      <Check className="h-3.5 w-3.5" />
+                      عنوان ثبت: «{kindLabel(finalKind)}»
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setManualKind((k) => (k ? null : finalKind === personKindOptions[0].v ? personKindOptions[1].v : personKindOptions[0].v))}
+                      className="shrink-0 text-[10px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                    >
+                      {manualKind ? "بازگشت به تشخیص خودکار" : "تشخیص دستی"}
+                    </button>
+                  </div>
+                  {manualKind && (
+                    <div className="grid grid-cols-2 gap-2">
+                      {personKindOptions.map((o) => (
+                        <button
+                          key={o.v}
+                          type="button"
+                          onClick={() => setManualKind(o.v)}
+                          className={`flex items-center justify-center gap-1.5 rounded-lg border-2 px-2 py-2 text-xs font-medium transition ${
+                            finalKind === o.v
+                              ? "border-amber-500 bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
+                              : "border-border text-muted-foreground"
+                          }`}
+                        >
+                          {finalKind === o.v && <Check className="h-3.5 w-3.5" />}
+                          {o.label}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <p className="rounded-lg bg-muted/60 p-2 text-[11px] leading-5 text-muted-foreground">
+                    {willBeSentence}
+                  </p>
+                </div>
+              ) : (
+                <p className="rounded-lg bg-muted/60 p-2 text-[11px] leading-5 text-muted-foreground">
+                  نام شخص را وارد کنید — عنوان ثبت (پرداخت بدهی، پرداخت قرض، دریافت طلب یا دریافت بدهی) از باقی‌ماندهٔ
+                  فعلی او خودکار تشخیص داده می‌شود: مثبت = طلب، منفی = بدهی
+                </p>
+              )}
+              {editing?.debtId && (
+                <button
+                  type="button"
+                  onClick={() => switchMode("plain")}
+                  className="flex items-center gap-1 text-[11px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                >
+                  <X className="h-3 w-3" />
+                  حذف اتصال به «{editing.debtName}» و ثبت به‌عنوان {type === "expense" ? "هزینه" : "درآمد"}
+                </button>
+              )}
+            </div>
+          )}
+
+          <div className="grid grid-cols-2 gap-3">
+            {isPersonMode && (
+              <div className="grid gap-2">
+                <Label>وضعیت فعلی شخص</Label>
+                <div className="rounded-lg border px-3 py-2 text-xs">
+                  {person ? (
+                    <span className={personNet > 0 ? "text-amber-700 dark:text-amber-300" : personNet < 0 ? "text-orange-700 dark:text-orange-300" : "text-emerald-700 dark:text-emerald-300"}>
+                      {personNet > 0
+                        ? `طلب ${formatMoneyU(personNet)} ${currencyLabel()}`
+                        : personNet < 0
+                          ? `بدهی ${formatMoneyU(-personNet)} ${currencyLabel()}`
+                          : "تسویه"}
+                    </span>
+                  ) : (
+                    <span className="text-muted-foreground">شخص جدید — بدون سابقه</span>
+                  )}
+                </div>
+              </div>
+            )}
+            <div className={`grid gap-2 ${!isPersonMode ? "col-span-2" : ""}`}>
               <Label>حساب بانکی</Label>
               <Select value={bankAccountId} onValueChange={setBankAccountId}>
                 <SelectTrigger>
@@ -350,109 +491,6 @@ function TxDialog({
             </div>
           </div>
 
-          {/* بدهی/طلب */}
-          {linkedToDebt ? (
-            <div className="flex items-start gap-2 rounded-xl border bg-muted/40 p-3 text-xs leading-5 text-muted-foreground">
-              <HandCoins className="mt-0.5 h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
-              <span>
-                این تراکنش بابت بدهی/طلب «{editing?.debtName}» ثبت شده است. برای اصلاح، مبلغ را از بخش
-                «بدهی‌ها» ویرایش کنید تا دوبار شمرده نشود.
-              </span>
-            </div>
-          ) : (
-            <div className="rounded-xl border p-3">
-              <button
-                type="button"
-                onClick={() => setDebtEnabled((v) => !v)}
-                className="flex w-full items-center justify-between text-sm font-medium"
-              >
-                <span className="flex items-center gap-2">
-                  <HandCoins className="h-4 w-4 text-amber-600 dark:text-amber-400" />
-                  بابت بدهی یا طلب ثبت شود؟
-                </span>
-                <span
-                  className={`flex h-5 w-9 items-center rounded-full p-0.5 transition ${
-                    debtEnabled ? "bg-amber-500" : "bg-muted-foreground/30"
-                  }`}
-                >
-                  <span
-                    className={`h-4 w-4 rounded-full bg-white shadow transition-transform ${
-                      debtEnabled ? "translate-x-0" : "-translate-x-4"
-                    }`}
-                  />
-                </span>
-              </button>
-              {debtEnabled && (
-                <div className="mt-3 space-y-2">
-                  <Input
-                    placeholder="نام شخص (مثلاً: علی)"
-                    value={personName}
-                    onChange={(e) => changePersonName(e.target.value)}
-                    list="debt-person-suggestions"
-                  />
-                  <datalist id="debt-person-suggestions">
-                    {personSuggestions.map((n) => (
-                      <option key={n} value={n} />
-                    ))}
-                  </datalist>
-                  {personName.trim() ? (
-                    <div className="space-y-2">
-                      {/* عنوان خودکار — از وضعیت فعلی شخص تشخیص داده می‌شود (پرداخت بدهی/قرض، دریافت طلب/بدهی) */}
-                      <div className="flex items-center justify-between gap-2 rounded-lg border-2 border-amber-400 bg-amber-50 px-2.5 py-2 dark:border-amber-700 dark:bg-amber-950/40">
-                        <span className="flex items-center gap-1.5 text-xs font-bold text-amber-800 dark:text-amber-300">
-                          <Check className="h-3.5 w-3.5" />
-                          عنوان ثبت: «{willBeLabel}»
-                        </span>
-                        <button
-                          type="button"
-                          onClick={() =>
-                            setManualMode((m) =>
-                              m
-                                ? null
-                                : debtMode === debtModeOptions[0].v
-                                  ? debtModeOptions[1].v
-                                  : debtModeOptions[0].v
-                            )
-                          }
-                          className="shrink-0 text-[10px] text-muted-foreground underline underline-offset-2 hover:text-foreground"
-                        >
-                          {manualMode ? "بازگشت به تشخیص خودکار" : "تشخیص دستی"}
-                        </button>
-                      </div>
-                      {manualMode && (
-                        <div className="grid grid-cols-2 gap-2">
-                          {debtModeOptions.map((o) => (
-                            <button
-                              key={o.v}
-                              type="button"
-                              onClick={() => setManualMode(o.v)}
-                              className={`flex items-center justify-center gap-1.5 rounded-lg border-2 px-2 py-2 text-xs font-medium transition ${
-                                debtMode === o.v
-                                  ? "border-amber-500 bg-amber-50 text-amber-800 dark:bg-amber-950/40 dark:text-amber-300"
-                                  : "border-border text-muted-foreground"
-                              }`}
-                            >
-                              {debtMode === o.v && <Check className="h-3.5 w-3.5" />}
-                              {o.label}
-                            </button>
-                          ))}
-                        </div>
-                      )}
-                      <p className="rounded-lg bg-muted/60 p-2 text-[11px] leading-5 text-muted-foreground">
-                        {debtSentence}
-                      </p>
-                    </div>
-                  ) : (
-                    <p className="rounded-lg bg-muted/60 p-2 text-[11px] leading-5 text-muted-foreground">
-                      نام شخص را وارد کنید — عنوان ثبت (پرداخت بدهی، پرداخت قرض، دریافت طلب یا دریافت بدهی) از وضعیت فعلی
-                      او خودکار تشخیص داده می‌شود
-                    </p>
-                  )}
-                </div>
-              )}
-            </div>
-          )}
-
           <div className="grid gap-2">
             <Label>تاریخ و ساعت</Label>
             <JalaliDateTimePicker value={dateIso} onChange={setDateIso} />
@@ -464,7 +502,7 @@ function TxDialog({
           </Button>
           <Button
             onClick={() => mutation.mutate()}
-            disabled={mutation.isPending || parseMoneyInput(amount) <= 0}
+            disabled={mutation.isPending || !canSave}
             className="bg-emerald-700 hover:bg-emerald-800"
           >
             {mutation.isPending ? "..." : editing ? "ذخیره تغییرات" : "ثبت تراکنش"}
@@ -483,7 +521,7 @@ export function Transactions({ categories, accounts }: { categories: Category[];
   const [q, setQ] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState<Transaction | null>(null);
-  const [preset, setPreset] = useState<{ type?: "income" | "expense"; amount?: number; purpose?: string; bankAccountId?: string } | null>(null);
+  const [preset, setPreset] = useState<{ type?: "income" | "expense"; amount?: number; purpose?: string; bankAccountId?: string; personName?: string } | null>(null);
   // هر بار باز شدن دیالوگ یک شماره جدید — با key باعث نصب مجدد می‌شود تا داده‌های
   // تراکنش در حال ویرایش همیشه از نو در فرم بنشیند (قبلاً فرم خالی/کهنه می‌ماند)
   const [openSeq, setOpenSeq] = useState(0);
@@ -507,7 +545,7 @@ export function Transactions({ categories, accounts }: { categories: Category[];
     onError: (e: Error) => toast({ title: "خطا", description: e.message, variant: "destructive" }),
   });
 
-  const openNew = (p?: { type?: "income" | "expense"; amount?: number; purpose?: string; bankAccountId?: string } | null) => {
+  const openNew = (p?: { type?: "income" | "expense"; amount?: number; purpose?: string; bankAccountId?: string; personName?: string } | null) => {
     setEditing(null);
     setPreset(p || null);
     setOpenSeq((s) => s + 1);
@@ -528,11 +566,12 @@ export function Transactions({ categories, accounts }: { categories: Category[];
         <Button onClick={() => openNew(null)} className="bg-emerald-700 hover:bg-emerald-800">
           <Plus className="ml-1 h-4 w-4" /> تراکنش جدید
         </Button>
-        <div className="flex rounded-lg border p-1">
+        <div className="flex flex-wrap rounded-lg border p-1">
           {[
             { v: "all", label: "همه" },
             { v: "income", label: "واریز" },
             { v: "expense", label: "برداشت" },
+            { v: "debt", label: "بدهی/طلب" },
           ].map((o) => (
             <button
               key={o.v}
@@ -584,7 +623,13 @@ export function Transactions({ categories, accounts }: { categories: Category[];
       ) : (
         <div className="space-y-2">
           {data.map((tx) => {
-            const debtLabel = debtLinkLabel(tx.type, tx.debtType ?? null);
+            const kind = txKindOf(tx);
+            const isPersonTx = Boolean(tx.debtId);
+            const rowTitle =
+              tx.purpose ||
+              (isPersonTx
+                ? `${kindLabel(kind)}${tx.debtName ? ` — ${tx.debtName}` : ""}`
+                : tx.category?.name || (tx.type === "income" ? "درآمد" : "هزینه"));
             return (
             <Card key={tx.id} className="py-0">
               <div className="flex items-center justify-between p-3">
@@ -600,15 +645,18 @@ export function Transactions({ categories, accounts }: { categories: Category[];
                   </div>
                   <div>
                     <div className="flex items-center gap-1.5 text-sm font-medium">
-                      {tx.purpose ||
-                        (debtLabel
-                          ? `${debtLabel}${tx.debtName ? ` — ${tx.debtName}` : ""}`
-                          : tx.category?.name || (tx.type === "income" ? "درآمد" : "هزینه"))}
+                      {rowTitle}
                       {tx.source === "sms" && <MessageSquareText className="h-3.5 w-3.5 text-muted-foreground" />}
                     </div>
-                    <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                    <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                       {formatDateFa(tx.date)}
-                      {tx.category && (
+                      {isPersonTx && (
+                        <Badge variant="outline" className="h-4 gap-1 border-amber-300 px-1.5 text-[10px] text-amber-700 dark:border-amber-800 dark:text-amber-400">
+                          <HandCoins className="h-2.5 w-2.5" />
+                          {kindLabel(kind)}
+                        </Badge>
+                      )}
+                      {!isPersonTx && tx.category && (
                         <Badge variant="secondary" className="h-4 gap-1 px-1.5 text-[10px]">
                           <span className="h-1.5 w-1.5 rounded-full" style={{ backgroundColor: tx.category.color }} />
                           {tx.category.name}
@@ -617,7 +665,7 @@ export function Transactions({ categories, accounts }: { categories: Category[];
                       {tx.debtName && (
                         <Badge variant="outline" className="h-4 gap-1 px-1.5 text-[10px] text-amber-700 dark:text-amber-400">
                           <HandCoins className="h-2.5 w-2.5" />
-                          {debtLabel ? `${debtLabel} — ${tx.debtName}` : tx.debtName}
+                          {tx.debtName}
                         </Badge>
                       )}
                       {tx.bankAccount && <span>• {tx.bankAccount.name}</span>}

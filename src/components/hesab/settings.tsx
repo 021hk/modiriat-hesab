@@ -19,7 +19,7 @@ import {
   type ReleaseInfo,
 } from "@/lib/app-update";
 
-const APP_VERSION = "۲.۱۱.۰";
+const APP_VERSION = "۲.۱۲.۰";
 
 function ThemeSection() {
   const { theme, setTheme } = useTheme();

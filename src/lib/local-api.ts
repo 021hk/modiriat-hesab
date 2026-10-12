@@ -6,6 +6,8 @@ import {
   dbGet,
   dbPut,
   dbDelete,
+  getMeta,
+  setMeta,
   newId,
   type StoreName,
 } from "@/lib/local-db";
@@ -21,6 +23,19 @@ import type {
   SmsLog,
   Stats,
 } from "@/lib/client-api";
+import {
+  TX_KINDS,
+  autoKind,
+  legacyKind,
+  legacyOpeningBalance,
+  matchPersonInText,
+  personKindsOfDirection,
+  personKey,
+  summarizePersonFromTxns,
+  txDirection,
+  txKindOf,
+  type TxKind,
+} from "@/lib/debt-utils";
 
 // ─── ابزارهای عمومی ───
 
@@ -47,6 +62,136 @@ async function getOrThrow<T extends { id: string }>(store: StoreName, id: string
   const row = await dbGet<T>(store, id);
   if (!row) notFound();
   return row;
+}
+
+// ─── مهاجرت مدل شخص‌محور (v2.12) ───
+// اصل: هر تراکنش فقط یک هویت (kind) دارد و معیار طلب/بدهی = شخص + علامت باقی‌مانده او
+// ۱) هر تراکنش kind یکتا می‌گیرد (هزینه/درآمد/پرداخت بدهی/پرداخت قرض/دریافت طلب/دریافت بدهی)
+// ۲) مانده اولیه هر شخص فقط از بخش «دستیِ» رکوردهای قدیمی محاسبه می‌شود (بدون دوبارشماری تراکنش‌های متصل)
+// ۳) رکوردهای هم‌نام (همان شخص) در یک رکورد ادغام می‌شوند
+const SCHEMA_VERSION = 3;
+let migratePromise: Promise<void> | null = null;
+
+async function runPersonMigration(): Promise<void> {
+  const ver = (await getMeta<number>("schemaVersion")) || 0;
+  if (ver >= SCHEMA_VERSION) return;
+
+  const txs = await dbGetAll<Transaction>(STORES.transactions);
+  const debts = await dbGetAll<Debt>(STORES.debts);
+
+  // ۱) kind برای تراکنش‌های قدیمی (از نوع تراکنش + نوع رکورد متصل)
+  for (const t of txs) {
+    if (t.kind && TX_KINDS.includes(t.kind)) continue;
+    const recType = t.debtId ? debts.find((d) => d.id === t.debtId)?.type ?? null : null;
+    await dbPut(STORES.transactions, { ...t, kind: legacyKind(t.type, recType) });
+  }
+
+  // ۲) مانده اولیه رکوردها (مثبت = طلب اولیه، منفی = بدهی اولیه)
+  for (const d of debts) {
+    if (typeof d.openingBalance === "number") continue;
+    const linked = txs.filter((t) => t.debtId === d.id);
+    await dbPut(STORES.debts, { ...d, openingBalance: legacyOpeningBalance(d, linked) });
+  }
+
+  // ۳) ادغام رکوردهای هم‌نام — یک شخص = یک رکورد
+  const freshDebts = await dbGetAll<Debt>(STORES.debts);
+  const groups = new Map<string, Debt[]>();
+  for (const d of freshDebts) {
+    const k = personKey(d.name) || `__id:${d.id}`;
+    const g = groups.get(k);
+    if (g) g.push(d);
+    else groups.set(k, [d]);
+  }
+  const remap: { from: string; to: string; name: string }[] = [];
+  const merged: { id: string; opening: number; phone: string | null; description: string | null }[] = [];
+  const doomed: string[] = [];
+  for (const [k, recs] of groups) {
+    if (recs.length < 2 || k.startsWith("__id:")) continue;
+    const sorted = [...recs].sort((a, b) => ((a.createdAt || "") < (b.createdAt || "") ? -1 : 1));
+    const canonical = sorted[0];
+    const opening = sorted.reduce((s, r) => s + (r.openingBalance || 0), 0);
+    const phone = sorted.map((r) => r.phone).find(Boolean) || null;
+    const descriptions = Array.from(new Set(sorted.map((r) => (r.description || "").trim()).filter(Boolean)));
+    merged.push({
+      id: canonical.id,
+      opening,
+      phone,
+      description: descriptions.length > 1 ? descriptions.join(" — ") : descriptions[0] || null,
+    });
+    for (const dup of sorted.slice(1)) {
+      remap.push({ from: dup.id, to: canonical.id, name: canonical.name });
+      doomed.push(dup.id);
+    }
+  }
+  if (doomed.length > 0) {
+    const allTxs = await dbGetAll<Transaction>(STORES.transactions);
+    for (const t of allTxs) {
+      const hit = remap.find((r) => r.from === t.debtId);
+      if (hit) await dbPut(STORES.transactions, { ...t, debtId: hit.to, debtName: hit.name });
+    }
+    for (const m of merged) {
+      const canon = await dbGet<Debt>(STORES.debts, m.id);
+      if (canon) {
+        await dbPut(STORES.debts, {
+          ...canon,
+          openingBalance: m.opening,
+          phone: canon.phone || m.phone,
+          description: canon.description || m.description,
+        });
+      }
+    }
+    for (const id of doomed) await dbDelete(STORES.debts, id);
+  }
+
+  await setMeta("schemaVersion", SCHEMA_VERSION);
+}
+
+function ensureMigrated(): Promise<void> {
+  if (!migratePromise) {
+    migratePromise = runPersonMigration().catch((e) => {
+      migratePromise = null;
+      throw e;
+    });
+  }
+  return migratePromise;
+}
+
+/** باقی‌مانده فعلی شخص — مانده اولیه + گردش بدهی − گردش طلب (با امکان نادیده‌گرفتن خود تراکنش) */
+async function personNetBefore(personId: string, excludeTxId?: string): Promise<number> {
+  const [person, txs] = await Promise.all([
+    dbGet<Debt>(STORES.debts, personId),
+    dbGetAll<Transaction>(STORES.transactions),
+  ]);
+  const opening = person?.openingBalance || 0;
+  let out = 0;
+  let inn = 0;
+  for (const t of txs) {
+    if (t.debtId !== personId || t.id === excludeTxId) continue;
+    if (txDirection(t) === "out") out += t.amount || 0;
+    else inn += t.amount || 0;
+  }
+  return opening + out - inn;
+}
+
+/** تشخیص خودکار شخص از متن (پیامک بانک) و اتصال تراکنش — اگر نامی پیدا نشد، بدون تغییر */
+async function tryAutoLinkPerson(txId: string, text: string | null | undefined): Promise<boolean> {
+  if (!text) return false;
+  const persons = await dbGetAll<Debt>(STORES.debts);
+  if (persons.length === 0) return false;
+  const matched = matchPersonInText(persons, text);
+  if (!matched) return false;
+  const tx = await dbGet<Transaction>(STORES.transactions, txId);
+  if (!tx || tx.debtId) return false;
+  const direction = txDirection(tx);
+  const net = await personNetBefore(matched.id, tx.id);
+  await dbPut(STORES.transactions, {
+    ...tx,
+    debtId: matched.id,
+    debtName: matched.name,
+    kind: autoKind(direction, net),
+    updatedAt: nowIso(),
+  });
+  return true;
 }
 
 // ─── اتصال دسته/حساب به تراکنش ───
@@ -236,7 +381,9 @@ async function listTransactions(query: URLSearchParams): Promise<Transaction[]> 
   const limit = Math.min(Number(query.get("limit") || 200) || 200, 500);
 
   let txs = await dbGetAll<Transaction>(STORES.transactions);
-  if (type === "income" || type === "expense") txs = txs.filter((t) => t.type === type);
+  // فیلتر «بدهی/طلب» = فقط تراکنش‌های متصل به اشخاص؛ واریز/برداشت = جهت پول
+  if (type === "debt") txs = txs.filter((t) => t.debtId);
+  else if (type === "income" || type === "expense") txs = txs.filter((t) => t.type === type);
   if (categoryId) txs = txs.filter((t) => t.categoryId === categoryId);
   if (bankAccountId) txs = txs.filter((t) => t.bankAccountId === bankAccountId);
   if (q) {
@@ -267,9 +414,12 @@ function validateTxBody(body: Record<string, unknown>): void {
 
 async function createTransaction(body: Record<string, unknown>): Promise<Transaction> {
   validateTxBody(body);
+  const type = body.type === "income" ? "income" : "expense";
   const tx: Transaction = {
     id: newId(),
-    type: body.type as "income" | "expense",
+    type,
+    // هویت اولیه: هزینه یا درآمد — با اتصال به شخص (link-debt) به پرداخت بدهی/قرض یا دریافت طلب/بدهی تبدیل می‌شود
+    kind: type,
     amount: num(body.amount),
     purpose: (body.purpose as string) || null,
     categoryId: (body.categoryId as string) || null,
@@ -277,8 +427,8 @@ async function createTransaction(body: Record<string, unknown>): Promise<Transac
     date: body.date ? new Date(body.date as string).toISOString() : nowIso(),
     source: body.source === "sms" ? "sms" : "manual",
     rawSms: (body.rawSms as string) || null,
-    debtId: (body.debtId as string) || null,
-    debtName: (body.debtName as string) || null,
+    debtId: null,
+    debtName: null,
     createdAt: nowIso(),
     updatedAt: nowIso(),
   };
@@ -286,82 +436,103 @@ async function createTransaction(body: Record<string, unknown>): Promise<Transac
   return joinTx(tx);
 }
 
-// ─── اتصال تراکنش به بدهی/طلب ───
-// mode:
-//  lend    = برداشت، به او قرض دادم → رکورد «بدهکار» (او به من بدهکار است) مبلغش زیاد می‌شود
-//  repay   = برداشت، بدهی خودم به او را دادم → رکورد «طلبکار» پرداختش زیاد می‌شود
-//  collect = واریز، طلبم از او را گرفتم → رکورد «بدهکار» پرداختش زیاد می‌شود
-//  borrow  = واریز، از او قرض گرفتم → رکورد «طلبکار» مبلغش زیاد می‌شود
-export type DebtLinkMode = "lend" | "repay" | "collect" | "borrow";
-
+// ─── اتصال تراکنش به شخص (بدهی/طلب) ───
+// هر تراکنش فقط یک هویت دارد — با اتصال به شخص، kind آن از علامت باقی‌مانده فعلی شخص
+// خودکار تشخیص داده می‌شود (برداشت → پرداخت بدهی یا پرداخت قرض، واریز → دریافت طلب یا دریافت بدهی)
+// و دیگر «هزینه/درآمد» هم حساب نمی‌شود. رکورد شخص هیچ عددی از تراکنش نگه نمی‌دارد.
 async function linkTxDebt(id: string, body: Record<string, unknown>): Promise<{ tx: Transaction; debt: Debt }> {
-  const personName = typeof body.personName === "string" ? body.personName.trim() : "";
-  const mode = body.mode as DebtLinkMode;
-  if (!personName) fail("نام شخص الزامی است");
-  if (!["lend", "repay", "collect", "borrow"].includes(mode)) fail("نوع اتصال نامعتبر است");
-
   const tx = await getOrThrow<Transaction>(STORES.transactions, id);
-  const amount = num(tx.amount);
-  if (!amount || amount <= 0) fail("مبلغ تراکنش نامعتبر است");
+  const direction = txDirection(tx);
 
-  const debtType: "debtor" | "creditor" = mode === "lend" || mode === "collect" ? "debtor" : "creditor";
-
-  // رکورد موجود همین شخص با همین نقش؟ (بسته به بانک محلی، id مقایسه می‌شود)
-  const debts = await dbGetAll<Debt>(STORES.debts);
-  let debt = debts.find((d) => d.type === debtType && d.name === personName);
-
-  if (!debt) {
-    // رکورد جدید — اگر «پرداخت/دریافت» است یعنی بدون سابقه بدهی، همان‌جا تسویه ثبت می‌شود
-    const paying = mode === "repay" || mode === "collect";
-    debt = {
-      id: newId(),
-      name: personName,
-      type: debtType,
-      amount: paying ? amount : amount,
-      paidAmount: paying ? amount : 0,
-      phone: null,
-      description: "ثبت‌شده از تراکنش‌ها",
-      dueDate: null,
-      isSettled: paying,
-      attachments: [],
-      createdAt: nowIso(),
-      updatedAt: nowIso(),
-    };
-  } else if (mode === "lend" || mode === "borrow") {
-    // مبلغ بدهی/طلب بیشتر می‌شود — اگر تسویه‌شده بود دوباره باز می‌شود
-    debt.amount += amount;
-    debt.isSettled = debt.amount > 0 && debt.paidAmount >= debt.amount;
-    debt.updatedAt = nowIso();
-  } else {
-    // پرداخت بدهی من / دریافت طلبم — مثل addPayment با سقف مبلغ
-    debt.paidAmount = Math.max(0, Math.min(debt.amount, debt.paidAmount + amount));
-    debt.isSettled = debt.amount > 0 && debt.paidAmount >= debt.amount;
-    debt.updatedAt = nowIso();
+  // شخص: با شناسه یا با نام (اگر شخصی با این نام نبود، ساخته می‌شود)
+  let person: Debt | null = null;
+  if (typeof body.personId === "string" && body.personId) {
+    person = (await dbGet<Debt>(STORES.debts, body.personId)) || null;
   }
-  await dbPut(STORES.debts, debt);
+  if (!person) {
+    const personName = typeof body.personName === "string" ? body.personName.trim() : "";
+    if (!personName) fail("نام شخص الزامی است");
+    const debts = await dbGetAll<Debt>(STORES.debts);
+    person = debts.find((d) => personKey(d.name) === personKey(personName)) || null;
+    if (!person) {
+      person = {
+        id: newId(),
+        name: personName,
+        type: "debtor",
+        amount: 0,
+        paidAmount: 0,
+        openingBalance: 0,
+        phone: null,
+        description: "ثبت‌شده از تراکنش‌ها",
+        dueDate: null,
+        isSettled: false,
+        attachments: [],
+        createdAt: nowIso(),
+        updatedAt: nowIso(),
+      };
+      await dbPut(STORES.debts, person);
+    }
+  }
+
+  // kind: انتخاب دستی (فقط از انواع شخص‌دارِ همین جهت) یا تشخیص خودکار از باقی‌مانده فعلی شخص
+  const net = await personNetBefore(person.id, tx.id);
+  const allowed = personKindsOfDirection(direction);
+  const kind: TxKind =
+    body.kind && allowed.includes(body.kind as TxKind) ? (body.kind as TxKind) : autoKind(direction, net);
 
   const updatedTx: Transaction = {
     ...tx,
-    debtId: debt.id,
-    debtName: personName,
+    debtId: person.id,
+    debtName: person.name,
+    kind,
     updatedAt: nowIso(),
   };
   await dbPut(STORES.transactions, updatedTx);
-  return { tx: updatedTx, debt };
+  return { tx: updatedTx, debt: person };
 }
 
 async function updateTransaction(id: string, body: Record<string, unknown>): Promise<Transaction> {
   const existing = await getOrThrow<Transaction>(STORES.transactions, id);
   if (body.amount !== undefined && num(body.amount) <= 0) fail("مبلغ باید بزرگ‌تر از صفر باشد");
+  const type = body.type === "income" || body.type === "expense" ? body.type : existing.type;
+  const direction: "in" | "out" = type === "income" ? "in" : "out";
+
+  // اتصال به شخص — body.debtId صریحاً null یعنی حذف اتصال (هویت به هزینه/درآمد برمی‌گردد)
+  let debtId = existing.debtId || null;
+  if (body.debtId !== undefined) debtId = (body.debtId as string) || null;
+  let debtName: string | null = existing.debtName ?? null;
+  if (debtId) {
+    const person = await dbGet<Debt>(STORES.debts, debtId);
+    if (!person) fail("شخص پیدا نشد");
+    debtName = person.name;
+  }
+
+  // هویت یکتا: بدون شخص = هزینه/درآمد؛ با شخص = انواع شخص‌دارِ همین جهت (انتخاب دستی یا تشخیص خودکار)
+  let kind: TxKind;
+  if (!debtId) {
+    kind = direction === "in" ? "income" : "expense";
+  } else {
+    const allowed = personKindsOfDirection(direction);
+    if (body.kind && allowed.includes(body.kind as TxKind)) {
+      kind = body.kind as TxKind;
+    } else {
+      const net = await personNetBefore(debtId, id);
+      kind = autoKind(direction, net);
+    }
+  }
+
   const updated: Transaction = {
     ...existing,
-    type: body.type === "income" || body.type === "expense" ? body.type : existing.type,
+    type,
+    kind,
     amount: body.amount !== undefined ? num(body.amount) : existing.amount,
     purpose: body.purpose !== undefined ? (body.purpose as string) || null : existing.purpose,
     categoryId: body.categoryId !== undefined ? (body.categoryId as string) || null : existing.categoryId,
     bankAccountId: body.bankAccountId !== undefined ? (body.bankAccountId as string) || null : existing.bankAccountId,
     date: body.date !== undefined ? new Date(body.date as string).toISOString() : existing.date,
     rawSms: body.rawSms !== undefined ? (body.rawSms as string) || null : existing.rawSms,
+    debtId,
+    debtName,
     updatedAt: nowIso(),
   };
   await dbPut(STORES.transactions, updated);
@@ -394,18 +565,23 @@ async function listDebts(query: URLSearchParams): Promise<Debt[]> {
 
 async function createDebt(body: Record<string, unknown>): Promise<Debt> {
   const name = typeof body.name === "string" ? body.name.trim() : "";
-  const amount = num(body.amount);
-  if (!name || !amount || amount <= 0) fail("نام و مبلغ الزامی است");
-  if (body.type !== "debtor" && body.type !== "creditor") fail("نوع بدهی نامعتبر است");
+  if (!name) fail("نام شخص الزامی است");
+  // در مدل جدید هر رکورد = یک شخص؛ مانده اولیه اختیاری است (مثبت = طلب، منفی = بدهی)
+  const openingBalance = num(body.openingBalance);
+  const debts = await dbGetAll<Debt>(STORES.debts);
+  if (debts.some((d) => personKey(d.name) === personKey(name))) {
+    fail("شخصی با این نام از قبل ثبت شده — همان را انتخاب کنید");
+  }
   const debt: Debt = {
     id: newId(),
     name,
-    type: body.type as "debtor" | "creditor",
-    amount,
+    type: openingBalance >= 0 ? "debtor" : "creditor",
+    amount: 0,
     paidAmount: 0,
+    openingBalance,
     phone: (body.phone as string) || null,
     description: (body.description as string) || null,
-    dueDate: body.dueDate ? new Date(body.dueDate as string).toISOString() : null,
+    dueDate: null,
     isSettled: false,
     attachments: [],
     createdAt: nowIso(),
@@ -422,6 +598,7 @@ async function updateDebt(id: string, body: Record<string, unknown>): Promise<De
   if (body.name !== undefined) updated.name = String(body.name).trim() || existing.name;
   if (body.type === "debtor" || body.type === "creditor") updated.type = body.type;
   if (body.amount !== undefined) updated.amount = num(body.amount);
+  if (body.openingBalance !== undefined) updated.openingBalance = num(body.openingBalance);
   if (body.phone !== undefined) updated.phone = (body.phone as string) || null;
   if (body.description !== undefined) updated.description = (body.description as string) || null;
   if (body.dueDate !== undefined) updated.dueDate = body.dueDate ? new Date(body.dueDate as string).toISOString() : null;
@@ -448,6 +625,19 @@ async function updateDebt(id: string, body: Record<string, unknown>): Promise<De
 
 async function deleteDebt(id: string): Promise<void> {
   await getOrThrow<Debt>(STORES.debts, id);
+  // تراکنش‌های متصل بدون شخص → هویت به هزینه/درآمد ساده برمی‌گردد (بدون دوبارشماری)
+  const txs = await dbGetAll<Transaction>(STORES.transactions);
+  for (const t of txs) {
+    if (t.debtId === id) {
+      await dbPut(STORES.transactions, {
+        ...t,
+        debtId: null,
+        debtName: null,
+        kind: t.type === "income" ? "income" : "expense",
+        updatedAt: nowIso(),
+      });
+    }
+  }
   const atts = await dbGetAll<Attachment>(STORES.attachments);
   for (const a of atts) {
     if (a.debtId === id) await dbDelete(STORES.attachments, a.id);
@@ -536,6 +726,7 @@ async function updateSmsLog(id: string, body: Record<string, unknown>): Promise<
     const tx: Transaction = {
       id: newId(),
       type,
+      kind: type,
       amount,
       purpose: (body.purpose as string) || null,
       categoryId: null,
@@ -543,10 +734,14 @@ async function updateSmsLog(id: string, body: Record<string, unknown>): Promise<
       date: body.date ? new Date(body.date as string).toISOString() : log.createdAt,
       source: "sms",
       rawSms: log.rawText,
+      debtId: null,
+      debtName: null,
       createdAt: nowIso(),
       updatedAt: nowIso(),
     };
     await dbPut(STORES.transactions, tx);
+    // تشخیص خودکار شخص از متن پیامک — اگر نام یکی از اشخاص در پیامک باشد، همان وصل می‌شود
+    await tryAutoLinkPerson(tx.id, log.rawText);
     const updated: SmsLog = { ...log, status: "imported", transactionId: tx.id };
     await dbPut(STORES.smsLogs, updated);
     return updated;
@@ -591,15 +786,39 @@ async function getStats(): Promise<Stats> {
   const monthTx = txs.filter((t) => inMonth(t, startOfMonth));
   const prevMonthTx = txs.filter((t) => inMonth(t, startOfPrevMonth, startOfMonth));
 
-  const openDebts = debts.filter((d) => !d.isSettled);
-  const debtors = openDebts.filter((d) => d.type === "debtor");
-  const creditors = openDebts.filter((d) => d.type === "creditor");
+  // ─── ثبت یکتا: فقط «هزینه/درآمد» خالص در آمار مالی حساب می‌شود ───
+  // تراکنش‌های بدهی/طلب (پرداخت بدهی/قرض، دریافت طلب/بدهی) فقط در بخش اشخاص حساب می‌شوند — نه اینجا
+  const isPlain = (t: Transaction, k: "income" | "expense") => txKindOf(t) === k;
+
+  const monthIncome = monthTx.filter((t) => isPlain(t, "income")).reduce((s, t) => s + t.amount, 0);
+  const monthExpense = monthTx.filter((t) => isPlain(t, "expense")).reduce((s, t) => s + t.amount, 0);
+  const prevIncome = prevMonthTx.filter((t) => isPlain(t, "income")).reduce((s, t) => s + t.amount, 0);
+  const prevExpense = prevMonthTx.filter((t) => isPlain(t, "expense")).reduce((s, t) => s + t.amount, 0);
+
+  // ─── اشخاص: معیار = باقی‌مانده هر شخص (مانده اولیه + گردش بدهی − گردش طلب) ───
+  // مثبت → طلب | منفی → بدهی
+  let totalDueToMe = 0;
+  let totalIOwe = 0;
+  let debtorCount = 0;
+  let creditorCount = 0;
+  for (const p of debts) {
+    const ptx = txs.filter((t) => t.debtId === p.id);
+    const s = summarizePersonFromTxns(p.openingBalance || 0, ptx);
+    if (s.net > 0) {
+      totalDueToMe += s.net;
+      debtorCount++;
+    } else if (s.net < 0) {
+      totalIOwe += -s.net;
+      creditorCount++;
+    }
+  }
 
   const byCategory: Record<string, { name: string; color: string; total: number }> = {};
   // قبلاً روی تراکنش‌های join‌نشده t.category?.name می‌خواند → همیشه «بدون دسته» بود!
+  // و حالا فقط «هزینه» خالص — تراکنش‌های بدهی/طلب اینجا نمی‌آیند
   const cats = await dbGetAll<Category>(STORES.categories);
   const catMap = new Map(cats.map((c) => [c.id, c]));
-  for (const t of monthTx.filter((t) => t.type === "expense")) {
+  for (const t of monthTx.filter((t) => isPlain(t, "expense"))) {
     const cat = t.categoryId ? catMap.get(t.categoryId) : undefined;
     const key = cat ? cat.id : "بدون دسته";
     if (!byCategory[key]) {
@@ -622,19 +841,19 @@ async function getStats(): Promise<Stats> {
   return {
     totalBalance,
     accountSummaries,
-    monthIncome: monthTx.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0),
-    monthExpense: monthTx.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0),
-    prevIncome: prevMonthTx.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0),
-    prevExpense: prevMonthTx.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0),
-    totalDueToMe: debtors.reduce((s, d) => s + (d.amount - d.paidAmount), 0),
-    totalIOwe: creditors.reduce((s, d) => s + (d.amount - d.paidAmount), 0),
-    debtorCount: debtors.length,
-    creditorCount: creditors.length,
+    monthIncome,
+    monthExpense,
+    prevIncome,
+    prevExpense,
+    totalDueToMe,
+    totalIOwe,
+    debtorCount,
+    creditorCount,
     expenseByCategory: Object.values(byCategory).sort((a, b) => b.total - a.total),
     recentTx,
     totals: {
-      income: txs.filter((t) => t.type === "income").reduce((s, t) => s + t.amount, 0),
-      expense: txs.filter((t) => t.type === "expense").reduce((s, t) => s + t.amount, 0),
+      income: txs.filter((t) => isPlain(t, "income")).reduce((s, t) => s + t.amount, 0),
+      expense: txs.filter((t) => isPlain(t, "expense")).reduce((s, t) => s + t.amount, 0),
     },
   };
 }
@@ -777,6 +996,10 @@ async function importBackup(backupInput: Record<string, unknown>): Promise<{ ok:
     attachments: (d.attachments || []).length,
     smsLogs: (d.smsLogs || []).length,
   };
+  // پشتیبان ممکن است از نسخه قدیمی باشد — مهاجرت شخص‌محور دوباره اجرا می‌شود
+  await setMeta("schemaVersion", 2);
+  migratePromise = null;
+  await ensureMigrated();
   return { ok: true, counts };
 }
 
@@ -785,6 +1008,7 @@ async function importBackup(backupInput: Record<string, unknown>): Promise<{ ok:
 type Handler = (query: URLSearchParams, body: Record<string, unknown>, id: string) => Promise<unknown>;
 
 export async function localRequest<T>(method: string, url: string, body?: unknown): Promise<T> {
+  await ensureMigrated();
   const [path, queryString] = url.split("?");
   const query = new URLSearchParams(queryString || "");
   const segments = path.replace(/^\/+|\/+$/g, "").split("/"); // api/transactions/:id

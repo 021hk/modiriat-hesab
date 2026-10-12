@@ -8,7 +8,8 @@ import { isNativeAndroid, getSmsPermission, readInboxSince, type NativeSms } fro
 import { parseBankSms } from "@/lib/sms-parser";
 import { parseConfiguredSenders, senderMatches, matchAccountByRef } from "@/lib/sms-match";
 import { dbGetAll, dbPut, getMeta, setMeta, newId, STORES } from "@/lib/local-db";
-import { api, type BankAccount, type SmsLog } from "@/lib/client-api";
+import { api, type BankAccount, type SmsLog, type Transaction, type Debt } from "@/lib/client-api";
+import { autoKind, matchPersonInText, txDirection, type TxKind } from "@/lib/debt-utils";
 
 const LAST_SYNC_KEY = "smsLastSync";
 const FIRST_SYNC_DAYS = 30; // بار اول: ۳۰ روز اخیر
@@ -201,6 +202,31 @@ async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
   // قدیمی → جدید برای ترتیب درست تاریخ تراکنش‌ها
   const sorted = [...messages].sort((a, b) => a.date - b.date);
 
+  // ─── تشخیص خودکار شخص از متن پیامک ───
+  // اگر نام یکی از اشخاص در متن پیامک باشد، تراکنش به همان شخص وصل می‌شود و عنوانش
+  // از علامت باقی‌مانده او تشخیص داده می‌شود (پرداخت بدهی/قرض یا دریافت طلب/بدهی)
+  let persons: Debt[] = [];
+  try {
+    persons = await dbGetAll<Debt>(STORES.debts);
+  } catch {
+    persons = [];
+  }
+  // گردش فعلی هر شخص (مانده اولیه + تراکنش‌های قبلی) — مبنای تشخیص عنوان
+  const personFlow = new Map<string, { out: number; in: number; opening: number }>();
+  for (const p of persons) personFlow.set(p.id, { out: 0, in: 0, opening: p.openingBalance || 0 });
+  try {
+    const existingTxs = await dbGetAll<Transaction>(STORES.transactions);
+    for (const t of existingTxs) {
+      if (!t.debtId) continue;
+      const f = personFlow.get(t.debtId);
+      if (!f) continue;
+      if (txDirection(t) === "out") f.out += t.amount || 0;
+      else f.in += t.amount || 0;
+    }
+  } catch {
+    // بدون گردش قبلی — عنوان فقط از مانده اولیه تشخیص داده می‌شود
+  }
+
   // dedupe بر اساس شناسه بومی پیامک (فقط nativeId — پیامک‌های تکراری واقعی نباید حذف شوند)
   const existing = await dbGetAll<SmsLog & { nativeId?: string }>(STORES.smsLogs);
   const seenNative = new Set<string>();
@@ -329,6 +355,7 @@ async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
       const tx = {
         id: newId(),
         type: parsed.type as "income" | "expense",
+        kind: parsed.type as TxKind,
         amount: finalAmount,
         purpose: parsed.bankName ? `پیامک بانک ${parsed.bankName}` : "ثبت خودکار پیامک",
         categoryId: null,
@@ -336,9 +363,24 @@ async function doSyncBankSms(options?: SyncOptions): Promise<SmsSyncResult> {
         date: dateIso,
         source: "sms" as const,
         rawSms: text,
+        debtId: null as string | null,
+        debtName: null as string | null,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
       };
+      // اتصال خودکار به شخص اگر نام او در پیامک باشد — عنوان از باقی‌مانده فعلی شخص
+      const matched = matchPersonInText(persons, text);
+      if (matched) {
+        const f = personFlow.get(matched.id);
+        const net = f ? f.opening + f.out - f.in : 0;
+        tx.debtId = matched.id;
+        tx.debtName = matched.name;
+        tx.kind = autoKind(parsed.type === "income" ? "in" : "out", net);
+        if (f) {
+          if (parsed.type === "income") f.in += finalAmount;
+          else f.out += finalAmount;
+        }
+      }
       await dbPut(STORES.transactions, tx);
       const log = { ...baseLog, status: "imported" as const, transactionId: tx.id };
       await dbPut(STORES.smsLogs, log);

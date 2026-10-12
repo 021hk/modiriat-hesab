@@ -1,100 +1,210 @@
-// ابزارهای مشترک بدهی/طلب — خالص و قابل‌تست (بدون وابستگی به مرورگر)
-// مدل: رکورد «بدهکار» = او به من بدهکار است (طلب من) | رکورد «طلبکار» = من به او بدهکارم (بدهی من)
-// عنوان خودکار تراکنش‌ها:
-//   برداشت → «پرداخت بدهی» (به طلبکار) یا «پرداخت قرض» (قرض دادن به بدهکار)
-//   واریز  → «دریافت طلب» (از بدهکار) یا «دریافت بدهی» (قرض گرفتن از طلبکار)
+// ابزارهای مشترک بدهی/طلب — مدل شخص‌محور (نسخه ۲.۱۲)
+// اصل ۱: هر تراکنش فقط و فقط «یک» هویت (kind) دارد — هزینه یا درآمد یا پرداخت بدهی یا پرداخت قرض یا دریافت طلب یا دریافت بدهی
+// اصل ۲: معیار طلب/بدهی = «شخص» و «باقی‌مانده» او — نه انتخاب دستی کاربر:
+//         باقی‌مانده = مانده اولیه + گردش بدهی (پرداخت‌های شما به او) − گردش طلب (دریافت‌های شما از او)
+//         مثبت → طلب | منفی → بدهی | صفر → تسویه
+// عنوان خودکار تراکنش‌ها از علامت باقی‌مانده شخص تشخیص داده می‌شود:
+//   برداشت (خروج پول) → «پرداخت بدهی» (اگر به او بدهکارید) یا «پرداخت قرض» (قرض دادن به او)
+//   واریز  (ورود پول) → «دریافت طلب» (اگر او به شما بدهکار است) یا «دریافت بدهی» (قرض گرفتن از او)
 import { normalizeSearch } from "@/lib/format";
 
-export type DebtSide = "debtor" | "creditor";
-export type DebtLinkMode = "lend" | "repay" | "collect" | "borrow";
+// ─── انواع یکتای تراکنش ───
 
-/** کلید یکسان‌سازی اشخاص برای گروه‌بندی رکوردهای هم‌نام (علی/علي/«علی » یکی می‌شوند) */
+export type TxKind =
+  | "expense" // هزینه — خروج پول، بدون شخص
+  | "income" // درآمد — ورود پول، بدون شخص
+  | "debt_payment" // پرداخت بدهی — خروج پول به شخصی که به او بدهکارید
+  | "loan_given" // پرداخت قرض — خروج پول به شخص (قرض دادن → او بدهکار شما می‌شود)
+  | "claim_received" // دریافت طلب — ورود پول از شخصی که به شما بدهکار است
+  | "loan_received"; // دریافت بدهی — ورود پول از شخص (قرض گرفتن → شما بدهکار او می‌شوید)
+
+export const TX_KINDS: TxKind[] = [
+  "expense",
+  "income",
+  "debt_payment",
+  "loan_given",
+  "claim_received",
+  "loan_received",
+];
+
+const KIND_LABELS: Record<TxKind, string> = {
+  expense: "هزینه",
+  income: "درآمد",
+  debt_payment: "پرداخت بدهی",
+  loan_given: "پرداخت قرض",
+  claim_received: "دریافت طلب",
+  loan_received: "دریافت بدهی",
+};
+
+export function kindLabel(kind: TxKind | null | undefined): string {
+  return kind ? KIND_LABELS[kind] || "تراکنش" : "تراکنش";
+}
+
+/** جهت تراکنش از روی kind — خروج (out) یا ورود (in) */
+export function kindDirection(kind: TxKind): "out" | "in" {
+  return kind === "expense" || kind === "debt_payment" || kind === "loan_given" ? "out" : "in";
+}
+
+/** آیا این kind تراکنشِ بابت شخص (بدهی/طلب) است؟ */
+export function isPersonKind(kind: TxKind | null | undefined): boolean {
+  return kind === "debt_payment" || kind === "loan_given" || kind === "claim_received" || kind === "loan_received";
+}
+
+/** انواع مجاز برای هر جهت */
+export function kindsOfDirection(direction: "out" | "in"): TxKind[] {
+  return direction === "out" ? ["expense", "debt_payment", "loan_given"] : ["income", "claim_received", "loan_received"];
+}
+
+/** انواع شخص‌دار (بدهی/طلب) هر جهت — برای انتخاب دستی در فرم */
+export function personKindsOfDirection(direction: "out" | "in"): TxKind[] {
+  return direction === "out" ? ["debt_payment", "loan_given"] : ["claim_received", "loan_received"];
+}
+
+/** تشخیص خودکار kind از جهت + علامت باقی‌مانده فعلی شخص */
+export function autoKind(direction: "out" | "in", personNet: number): TxKind {
+  if (direction === "out") return personNet < 0 ? "debt_payment" : "loan_given";
+  return personNet > 0 ? "claim_received" : "loan_received";
+}
+
+/** جمله توضیح زنده برای فرم تراکنش — شامل عنوان نهایی ثبت */
+export function kindSentence(kind: TxKind, personName: string, displayAmount: string, unit: string): string {
+  const a = `${displayAmount} ${unit}`;
+  switch (kind) {
+    case "loan_given":
+      return `عنوان ثبت: «پرداخت قرض» — ${a} به ${personName || "شخص"} قرض می‌دهید و او به شما بدهکار می‌شود`;
+    case "debt_payment":
+      return `عنوان ثبت: «پرداخت بدهی» — بدهی شما به ${personName || "شخص"} به اندازه ${a} کم می‌شود`;
+    case "claim_received":
+      return `عنوان ثبت: «دریافت طلب» — طلب شما از ${personName || "شخص"} به اندازه ${a} کم می‌شود`;
+    case "loan_received":
+      return `عنوان ثبت: «دریافت بدهی» — ${a} از ${personName || "شخص"} قرض می‌گیرید و بدهی شما بیشتر می‌شود`;
+    case "expense":
+      return `عنوان ثبت: «هزینه» — ${a} هزینه ثبت می‌شود و در آمار هزینه‌ها حساب می‌شود`;
+    case "income":
+      return `عنوان ثبت: «درآمد» — ${a} درآمد ثبت می‌شود و در آمار درآمدها حساب می‌شود`;
+  }
+}
+
+// ─── خواندن kind/جهت از رکورد تراکنش (با پشتیبانی از داده قدیمی بدون kind) ───
+
+export type TxLike = {
+  kind?: TxKind | null;
+  type?: "income" | "expense" | string;
+  debtId?: string | null;
+  debtType?: "debtor" | "creditor" | null;
+  amount?: number;
+};
+
+/** نگاشت داده قدیمی (type + نوع رکورد بدهی) → kind */
+export function legacyKind(txType: "income" | "expense" | string, debtType?: "debtor" | "creditor" | null): TxKind {
+  if (debtType === "creditor") return txType === "income" ? "loan_received" : "debt_payment";
+  if (debtType === "debtor") return txType === "income" ? "claim_received" : "loan_given";
+  return txType === "income" ? "income" : "expense";
+}
+
+/** kind قطعی یک تراکنش — kind ذخیره‌شده، وگرنه نگاشت قدیمی */
+export function txKindOf(tx: TxLike): TxKind {
+  if (tx.kind && TX_KINDS.includes(tx.kind)) return tx.kind;
+  if (tx.debtId) return legacyKind(tx.type || "expense", tx.debtType ?? null);
+  return tx.type === "income" ? "income" : "expense";
+}
+
+/** جهت تراکنش — خروج یا ورود پول */
+export function txDirection(tx: TxLike): "out" | "in" {
+  return kindDirection(txKindOf(tx));
+}
+
+// ─── کلید یکسان‌سازی اشخاص (علی/علي/«علی » یکی می‌شوند) ───
+
 export function personKey(name: string): string {
   return normalizeSearch(name || "").trim();
 }
 
-// ساختار حداقلی رکورد بدهی برای تست و استفاده عمومی (Debt اصلی سازگار ساختاری است)
-export type DebtLike = {
-  type: DebtSide;
-  amount: number;
-  paidAmount: number;
-  isSettled?: boolean;
-};
+// ─── تجمیع باقی‌مانده یک شخص از روی تراکنش‌ها ───
 
-/** برچسب فارسی اتصال تراکنش به بدهی/طلب — فقط از نوع تراکنش و نوع رکورد شخص */
-export function debtLinkLabel(txType: "income" | "expense", debtType?: DebtSide | null): string | null {
-  if (debtType !== "debtor" && debtType !== "creditor") return null;
-  if (txType === "expense") return debtType === "creditor" ? "پرداخت بدهی" : "پرداخت قرض";
-  return debtType === "debtor" ? "دریافت طلب" : "دریافت بدهی";
-}
-
-/** مانده باز یک رکورد (هرگز منفی نیست) */
-export function debtRemaining(d: Pick<DebtLike, "amount" | "paidAmount">): number {
-  return Math.max(0, (d.amount || 0) - (d.paidAmount || 0));
-}
-
-/**
- * تشخیص خودکار حالت اتصال از وضعیت فعلی شخص:
- * برداشت → اگر به او بدهکاریم «پرداخت بدهی» (repay)، وگرنه «پرداخت قرض» (lend)
- * واریز  → اگر او به ما بدهکار است «دریافت طلب» (collect)، وگرنه «دریافت بدهی» (borrow)
- * رکوردهای تسویه‌شده یا مانده‌صفر نادیده گرفته می‌شوند.
- */
-export function autoDetectDebtMode(txType: "income" | "expense", personRecords: DebtLike[]): DebtLinkMode {
-  const open = (personRecords || []).filter((d) => !d.isSettled && debtRemaining(d) > 0);
-  if (txType === "expense") return open.some((d) => d.type === "creditor") ? "repay" : "lend";
-  return open.some((d) => d.type === "debtor") ? "collect" : "borrow";
-}
-
-/** نوع رکورد متناظر با هر حالت اتصال */
-export function sideOfMode(mode: DebtLinkMode): DebtSide {
-  return mode === "lend" || mode === "collect" ? "debtor" : "creditor";
-}
-
-/** جمله توضیح زندهٔ حالت اتصال — با عنوان خودکار که در لیست تراکنش‌ها دیده می‌شود */
-export function debtModeSentence(mode: DebtLinkMode, personName: string, displayAmount: string, unit: string): string {
-  const p = personName || "شخص";
-  switch (mode) {
-    case "lend":
-      return `عنوان ثبت: «پرداخت قرض» — ${displayAmount} ${unit} به ${p} قرض می‌دهید و او به شما بدهکار می‌شود`;
-    case "repay":
-      return `عنوان ثبت: «پرداخت بدهی» — بدهی شما به ${p} به اندازه ${displayAmount} ${unit} کم می‌شود`;
-    case "collect":
-      return `عنوان ثبت: «دریافت طلب» — طلب شما از ${p} به اندازه ${displayAmount} ${unit} کم می‌شود`;
-    case "borrow":
-      return `عنوان ثبت: «دریافت بدهی» — ${displayAmount} ${unit} از ${p} قرض می‌گیرید و بدهی شما بیشتر می‌شود`;
-  }
-}
-
-// ─── تجمیع گردش یک شخص از روی همه رکوردهایش ───
-
-export type PersonStatus = "claim" | "debt" | "settled" | "none";
+export type PersonStatus = "claim" | "debt" | "settled";
 
 export type PersonSummary = {
-  turnClaim: number; // گردش طلب = کل قرض‌هایی که به او داده‌اید (رکوردهای بدهکار)
-  turnDebt: number; // گردش بدهی = کل قرض‌هایی که از او گرفته‌اید (رکوردهای طلبکار)
-  claimReceived: number; // بازگشته از طلب (دریافت‌های او به شما)
-  debtRepaid: number; // پرداخت‌شده از بدهی (پرداخت‌های شما به او)
-  remainClaim: number; // مانده طلب
-  remainDebt: number; // مانده بدهی
-  status: PersonStatus;
+  turnDebt: number; // گردش بدهی = جمع پرداخت‌های شما به این شخص (خروج)
+  turnClaim: number; // گردش طلب = جمع دریافت‌های شما از این شخص (ورود)
+  paidCount: number; // تعداد پرداخت‌ها
+  receivedCount: number; // تعداد دریافت‌ها
+  openingBalance: number; // مانده اولیه (+ = طلب اولیه، − = بدهی اولیه)
+  net: number; // باقی‌مانده = مانده اولیه + گردش بدهی − گردش طلب
+  status: PersonStatus; // مثبت → طلب | منفی → بدهی | صفر → تسویه
 };
 
-/** وضعیت نهایی یک شخص: طلب دارید یا بدهی دارید یا تسویه */
-export function summarizePerson(records: DebtLike[]): PersonSummary {
-  const claimRecs = (records || []).filter((r) => r.type === "debtor");
-  const debtRecs = (records || []).filter((r) => r.type === "creditor");
-  const turnClaim = claimRecs.reduce((s, r) => s + (r.amount || 0), 0);
-  const claimReceived = claimRecs.reduce((s, r) => s + (r.paidAmount || 0), 0);
-  const turnDebt = debtRecs.reduce((s, r) => s + (r.amount || 0), 0);
-  const debtRepaid = debtRecs.reduce((s, r) => s + (r.paidAmount || 0), 0);
-  const remainClaim = Math.max(0, turnClaim - claimReceived);
-  const remainDebt = Math.max(0, turnDebt - debtRepaid);
+/**
+ * باقی‌مانده شخص از روی مانده اولیه و تراکنش‌های او — معیارِ وضعیت طلب/بدهی
+ * جهت هر تراکنش با txDirection (kind-محور با fallback به type قدیمی) تعیین می‌شود
+ */
+export function summarizePersonFromTxns(
+  openingBalance: number,
+  personTxs: TxLike[] | null | undefined
+): PersonSummary {
+  let turnDebt = 0;
+  let turnClaim = 0;
+  let paidCount = 0;
+  let receivedCount = 0;
+  for (const t of personTxs || []) {
+    if (txDirection(t) === "out") {
+      turnDebt += t.amount || 0;
+      paidCount++;
+    } else {
+      turnClaim += t.amount || 0;
+      receivedCount++;
+    }
+  }
+  const opening = openingBalance || 0;
+  const net = opening + turnDebt - turnClaim;
+  const status: PersonStatus = net > 0 ? "claim" : net < 0 ? "debt" : "settled";
+  return { turnDebt, turnClaim, paidCount, receivedCount, openingBalance: opening, net, status };
+}
 
-  let status: PersonStatus;
-  if (!records || records.length === 0) status = "none";
-  else if (remainClaim > remainDebt) status = "claim";
-  else if (remainDebt > remainClaim) status = "debt";
-  else status = "settled";
+// ─── مهاجرت داده قدیمی → مدل شخص‌محور ───
 
-  return { turnClaim, turnDebt, claimReceived, debtRepaid, remainClaim, remainDebt, status };
+/**
+ * مانده اولیه یک رکورد قدیمی بدهکار/طلبکار — فقط بخش «دستیِ» که تراکنش‌ها پوشش نداده‌اند:
+ *   بدهکار (او به من بدهکار است): مانده اولیه = مانده رکورد − پرداخت‌های متصل + دریافت‌های متصل (علامت +)
+ *   طلبکار (من به او بدهکارم):    مانده اولیه = −(مانده رکورد − دریافت‌های متصل + پرداخت‌های متصل) (علامت −)
+ * رکوردهایی که کاملاً از تراکنش ساخته شده‌اند → مانده اولیه صفر (تراکنش خودش حساب می‌شود — بدون دوبارشماری)
+ */
+export function legacyOpeningBalance(
+  rec: { type?: "debtor" | "creditor" | string; amount?: number; paidAmount?: number },
+  linkedTxs: TxLike[] | null | undefined
+): number {
+  const outSum = (linkedTxs || []).filter((t) => txDirection(t) === "out").reduce((s, t) => s + (t.amount || 0), 0);
+  const inSum = (linkedTxs || []).filter((t) => txDirection(t) === "in").reduce((s, t) => s + (t.amount || 0), 0);
+  const remaining = Math.max(0, (rec.amount || 0) - (rec.paidAmount || 0));
+  if (rec.type === "debtor") return remaining - outSum + inSum;
+  return -(remaining - inSum + outSum);
+}
+
+// ─── تشخیص خودکار شخص از متن پیامک بانک ───
+
+/**
+ * اگر نام یکی از اشخاص در متن پیامک باشد همان را برمی‌گرداند — وگرنه null.
+ * محافظه‌کارانه: نام باید حداقل ۳ حرف باشد؛ توکن‌های ۴+ حرفی نام هم جستجو می‌شوند؛
+ * بلندترین نام تطبیق‌یافته برنده است و اگر دو شخصِ هم‌طول تطبیق کنند، مبهم است و هیچ‌کدام.
+ */
+export function matchPersonInText(
+  persons: { id: string; name: string }[] | null | undefined,
+  text: string
+): { id: string; name: string } | null {
+  const t = normalizeSearch(text || "");
+  if (!t) return null;
+  const candidates = (persons || []).filter((p) => {
+    const key = personKey(p.name);
+    if (key.length < 3) return false;
+    if (t.includes(key)) return true;
+    return key
+      .split(" ")
+      .filter((w) => w.length >= 4)
+      .some((w) => t.includes(w));
+  });
+  if (candidates.length === 0) return null;
+  let best = 0;
+  for (const c of candidates) best = Math.max(best, personKey(c.name).length);
+  const winners = candidates.filter((c) => personKey(c.name).length === best);
+  return winners.length === 1 ? { id: winners[0].id, name: winners[0].name } : null;
 }
