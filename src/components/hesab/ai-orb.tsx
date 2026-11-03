@@ -5,6 +5,7 @@
 // مدل Gemini فقط اقدام برمی‌گرداند؛ اجرا روی دادهٔ محلی خود دستگاه انجام می‌شود.
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { pushBackHandler } from "@/lib/back-nav";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -220,6 +221,15 @@ export function AiOrb({ onOpenSettings }: { onOpenSettings: () => void }) {
   useEffect(() => {
     if (settings?.ai) setSpeakOn(Boolean(settings.ai.speakReplies));
   }, [settings?.ai]);
+
+  // پنل باز گوی با دکمهٔ برگشت گوشی بسته می‌شود — قبل از تعویض تب
+  useEffect(() => {
+    if (!open) return;
+    return pushBackHandler(() => {
+      setOpen(false);
+      return true;
+    });
+  }, [open]);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;

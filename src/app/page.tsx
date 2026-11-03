@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
@@ -18,6 +18,9 @@ import { AiOrb } from "@/components/hesab/ai-orb";
 import { api, type Category, type BankAccount } from "@/lib/client-api";
 import { SmsBackgroundSync } from "@/components/hesab/sms-background-sync";
 import { syncInstallmentNotifications } from "@/lib/notifications";
+import { installBackButton } from "@/lib/back-nav";
+import { App } from "@capacitor/app";
+import { Capacitor } from "@capacitor/core";
 
 const TABS = [
   { value: "dashboard", label: "داشبورد", short: "داشبورد", icon: LayoutDashboard },
@@ -33,6 +36,37 @@ function AppContent() {
   const [tab, setTab] = useState("dashboard");
   const [txOpen, setTxOpen] = useState(false);
   const [txPreset, setTxPreset] = useState<{ personName?: string; type?: "income" | "expense" } | null>(null);
+
+  // تاریخچهٔ ناوبری تب‌ها — دکمهٔ برگشت گوشی قدم‌به‌قدم به صفحه‌های قبلی برمی‌گردد،
+  // تا رسیدن به داشبورد؛ فشردن برگشت روی داشبورد از برنامه خارج می‌شود.
+  const tabHistRef = useRef<string[]>(["dashboard"]);
+
+  const goToTab = useCallback((t: string) => {
+    setTab(t);
+    const h = tabHistRef.current;
+    if (h[h.length - 1] !== t) {
+      h.push(t);
+      if (h.length > 40) h.splice(0, h.length - 40);
+    }
+  }, []);
+
+  const backToPrevTab = useCallback((): boolean => {
+    const h = tabHistRef.current;
+    if (h.length > 1) {
+      h.pop();
+      setTab(h[h.length - 1]);
+      return true;
+    }
+    return false;
+  }, []);
+
+  // دکمهٔ برگشت گوشی: اول اورلی‌های باز (دیالوگ‌ها/پنل گوی) بسته می‌شوند،
+  // بعد برگشت به تب قبلی، و روی داشبورد خروج از برنامه
+  useEffect(() => {
+    return installBackButton(backToPrevTab, () => {
+      if (Capacitor.isNativePlatform()) void App.exitApp();
+    });
+  }, [backToPrevTab]);
 
   // همگام‌سازی پس‌زمینه پیامک‌های بانکی — باز شدن برنامه، بازگشت از پس‌زمینه، پیامک زنده (در هر تب)
   // منطق در SmsBackgroundSync است؛ اینجا فقط نصب می‌شود.
@@ -79,7 +113,7 @@ function AppContent() {
 
       {/* محتوا */}
       <main className="mx-auto w-full max-w-6xl flex-1 px-4 pb-24 pt-4 lg:pb-8">
-        <Tabs value={tab} onValueChange={setTab}>
+        <Tabs value={tab} onValueChange={goToTab}>
           <TabsList className="mb-4 hidden w-full justify-start gap-1 overflow-x-auto rounded-xl bg-muted p-1 lg:flex">
             {TABS.map((t) => (
               <TabsTrigger
@@ -94,7 +128,7 @@ function AppContent() {
           </TabsList>
 
           <TabsContent value="dashboard">
-            <Dashboard onGoToTab={setTab} />
+            <Dashboard onGoToTab={goToTab} />
           </TabsContent>
           <TabsContent value="transactions">
             <Transactions categories={categories || []} accounts={accounts || []} />
@@ -123,7 +157,7 @@ function AppContent() {
           {TABS.map((t) => (
             <button
               key={t.value}
-              onClick={() => setTab(t.value)}
+              onClick={() => goToTab(t.value)}
               className={`flex min-h-14 flex-col items-center justify-center gap-0.5 px-0.5 py-1.5 text-[9px] leading-none transition ${
                 tab === t.value ? "text-emerald-700" : "text-muted-foreground"
               }`}
@@ -136,12 +170,12 @@ function AppContent() {
       </nav>
 
       {/* گوی هوشمند — دستیار Gemini (قابل جابه‌جایی با انگشت) */}
-      <AiOrb onOpenSettings={() => setTab("settings")} />
+      <AiOrb onOpenSettings={() => goToTab("settings")} />
 
       {/* فوتر */}
       <footer className="mt-auto hidden border-t bg-card py-4 lg:block">
         <div className="mx-auto max-w-6xl px-4 text-center text-xs text-muted-foreground">
-          حساب‌یار — نسخه ۲.۱۴.۰ | اپلیکیشن آفلاین — ثبت خودکار پیامک بانکی + دستیار هوشمند
+          حساب‌یار — نسخه ۲.۱۴.۱ | اپلیکیشن آفلاین — ثبت خودکار پیامک بانکی + دستیار هوشمند
         </div>
       </footer>
 

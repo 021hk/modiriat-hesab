@@ -48,7 +48,7 @@ import { openExternalUrl } from "@/lib/native-sms";
 import { checkNotifPermission, requestNotifPermission, syncInstallmentNotifications, fireTestNotification, notifSupported } from "@/lib/notifications";
 import type { AppSettings, NotifSettings } from "@/lib/client-api";
 
-const APP_VERSION = "۲.۱۴.۰";
+const APP_VERSION = "۲.۱۴.۱";
 
 function ThemeSection() {
   const { theme, setTheme } = useTheme();
