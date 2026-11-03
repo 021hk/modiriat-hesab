@@ -76,36 +76,64 @@ export interface AccountLike {
 
 const MIN_OVERLAP = 4; // حداقل ارقام مشترک برای اطمینان از تطبیق
 
+/**
+ * امتیاز تطبیق یک شناسهٔ پیامک با یک فیلد حساب — بزرگ‌تر = مطمئن‌تر
+ * تطبیق کامل = بیشترین امتیاز؛ وگرنه هرچه ارقام مشترک بیشتر، امتیاز بیشتر.
+ * v2.14: وقتی از یک شمارهٔ بانک چند حساب داریم، حسابی که «بیشترین» ارقام مشترک دارد برنده است
+ * (قبلاً اولین تطبیق برنده می‌شد و گاهی حساب اشتباه انتخاب می‌شد).
+ */
+export function scoreAccountRefMatch(accountFieldDigits: string, refDigits: string): number {
+  const d = accountFieldDigits;
+  const ref = refDigits;
+  if (!d || d.length < MIN_OVERLAP || !ref) return 0;
+  if (d === ref) return 1000 + d.length; // تطبیق کامل
+  if (ref.endsWith(d)) return d.length * 10 + 5; // شمارهٔ حسابِ پیامک با پسوند حساب کاربر می‌خواند
+  if (d.endsWith(ref)) return ref.length * 10; // شناسهٔ پیامک پسوند شمارهٔ حساب کاربر است
+  return 0;
+}
+
 // تطبیق سخت‌گیرانه پیامک با حساب کاربر بر اساس شماره حساب/کارت داخل پیامک
 // null یعنی «این پیامک مال هیچ‌کدام از حساب‌های من نیست» → باید رد شود
+// v2.14: امتیازدهی — حسابی که بیشترین ارقام مشترک با پیامک دارد انتخاب می‌شود
 export function matchAccountByRef(
   accounts: AccountLike[],
   refDigits: string | null | undefined,
   cardTail?: string | null
 ): string | null {
   const ref = digitsOnly(refDigits);
-  if (!ref && !cardTail) return null;
 
-  // ۱) تطبیق مستقیم ارقام: شماره حساب/کارت کاربر پسوند ارقام پیامک باشد (یا برعکس)
+  // ۱) تطبیق مستقیم ارقام با امتیازدهی (بهترین حساب برنده است)
   if (ref) {
+    let bestId: string | null = null;
+    let bestScore = 0;
     for (const a of accounts) {
       for (const field of [a.cardNumber, a.accountNumber, a.iban]) {
         const d = digitsOnly(field);
-        if (d.length < MIN_OVERLAP) continue;
-        if (ref.endsWith(d) || d.endsWith(ref)) return a.id;
+        const score = scoreAccountRefMatch(d, ref);
+        if (score > bestScore) {
+          bestScore = score;
+          bestId = a.id;
+        }
       }
     }
+    if (bestId) return bestId;
   }
 
   // ۲) تطبیق ۴ رقم آخر (برای خطوط شناسه گروه‌بندی‌شده مثل 777.888.13972872.1 → انتهای معنادار 2872)
   const tail = digitsOnly(cardTail);
   if (tail.length >= 3) {
+    let bestId: string | null = null;
+    let bestLen = 0;
     for (const a of accounts) {
       for (const field of [a.cardNumber, a.accountNumber]) {
         const d = digitsOnly(field);
-        if (d.length >= 4 && d.endsWith(tail)) return a.id;
+        if (d.length >= 4 && d.endsWith(tail) && d.length > bestLen) {
+          bestLen = d.length;
+          bestId = a.id;
+        }
       }
     }
+    if (bestId) return bestId;
   }
 
   return null;

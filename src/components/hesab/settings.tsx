@@ -22,7 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Sun, Moon, Monitor, Coins, Info, SunMoon, RefreshCw, Download, CheckCircle2, AlertTriangle, ExternalLink, Wand2, Plus, Pencil, Trash2 } from "lucide-react";
+import { Sun, Moon, Monitor, Coins, Info, SunMoon, RefreshCw, Download, CheckCircle2, AlertTriangle, ExternalLink, Wand2, Plus, Pencil, Trash2, Sparkles, BellRing, Volume2, ShieldCheck } from "lucide-react";
 import { Backup } from "@/components/hesab/backup";
 import {
   currencyLabel,
@@ -37,14 +37,18 @@ import {
 import { flattenCategoryTree } from "@/lib/category-tree";
 import { describeRule, type AutoCatRule } from "@/lib/auto-cat";
 import { api, type Category } from "@/lib/client-api";
+import { useToast } from "@/hooks/use-toast";
 import {
   fetchLatestRelease,
   isNewerVersion,
   downloadReleaseApk,
   type ReleaseInfo,
 } from "@/lib/app-update";
+import { openExternalUrl } from "@/lib/native-sms";
+import { checkNotifPermission, requestNotifPermission, syncInstallmentNotifications, fireTestNotification, notifSupported } from "@/lib/notifications";
+import type { AppSettings, NotifSettings } from "@/lib/client-api";
 
-const APP_VERSION = "۲.۱۳.۰";
+const APP_VERSION = "۲.۱۴.۰";
 
 function ThemeSection() {
   const { theme, setTheme } = useTheme();
@@ -567,12 +571,242 @@ function AutoCatSection() {
   );
 }
 
+// ─── دستیار هوشمند (Gemini) — v2.14 ───
+
+function AiSection() {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const { data: settings } = useQuery<AppSettings>({
+    queryKey: ["app-settings"],
+    queryFn: () => api.get("/api/settings"),
+  });
+  const [keyInput, setKeyInput] = useState<string | null>(null);
+  const [showKey, setShowKey] = useState(false);
+
+  const save = useMutation({
+    mutationFn: (geminiApiKey: string | null) => api.put("/api/settings", { geminiApiKey }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["app-settings"] });
+      setKeyInput(null);
+      toast({ title: "کلید ذخیره شد", description: "گوی هوشمند حالا فعال است — روی گوی سبز بزن" });
+    },
+    onError: (e: Error) => toast({ title: "خطا", description: e.message, variant: "destructive" }),
+  });
+
+  const saved = settings?.geminiApiKey || "";
+  const shown = keyInput !== null ? keyInput : saved;
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Sparkles className="h-5 w-5 text-emerald-700 dark:text-emerald-400" />
+          دستیار هوشمند (Gemini)
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <p className="text-xs leading-5 text-muted-foreground">
+          گوی سبز شناور روی صفحه دستیار گفتگوی شماست: دستور بده — مثل «مبالغ بین ۱۰۰ تا ۵۰۰ هزار تومان رو ببر تو
+          هزینه‌های جاری» — تا خودش انجام بدهد. برای فعال‌سازی، کلید رایگان Gemini لازم است.
+        </p>
+        <div className="flex gap-2">
+          <Input
+            dir="ltr"
+            type={showKey ? "text" : "password"}
+            className="flex-1 text-left font-mono text-xs"
+            placeholder="AIza... — کلید Gemini"
+            value={shown}
+            onChange={(e) => setKeyInput(e.target.value)}
+          />
+          <Button variant="outline" size="icon" className="h-10 w-10 shrink-0" onClick={() => setShowKey((v) => !v)} aria-label="نمایش کلید">
+            <ShieldCheck className="h-4 w-4" />
+          </Button>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            size="sm"
+            className="bg-emerald-700 hover:bg-emerald-800"
+            disabled={keyInput === null || save.isPending}
+            onClick={() => save.mutate(keyInput?.trim() || null)}
+          >
+            ذخیره کلید
+          </Button>
+          {saved && (
+            <Button variant="outline" size="sm" onClick={() => save.mutate(null)} disabled={save.isPending}>
+              حذف کلید
+            </Button>
+          )}
+          {saved && (
+            <span className="flex items-center gap-1 text-[11px] text-emerald-700 dark:text-emerald-400">
+              <CheckCircle2 className="h-3.5 w-3.5" /> فعال — پایان کلید: …{saved.slice(-4)}
+            </span>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={() => void openExternalUrl("https://aistudio.google.com/apikey")}
+          className="flex items-center gap-1 text-[11px] text-emerald-700 underline-offset-2 hover:underline dark:text-emerald-400"
+        >
+          <ExternalLink className="h-3 w-3" />
+          گرفتن کلید رایگان از aistudio.google.com/apikey
+        </button>
+        <p className="rounded-lg bg-muted/60 p-2.5 text-[11px] leading-5 text-muted-foreground">
+          امنیت: کلید فقط روی خود دستگاه ذخیره می‌شود. برای پاسخ به دستورها، متن درخواست به سرور Gemini
+          گوگل می‌رود؛ داده‌های حساس شما (شماره‌ها و جزئیات) خارج نمی‌شوند.
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+// ─── یادآور اقساط و چک‌ها — v2.14 ───
+
+function NotificationsSection() {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const { data: settings } = useQuery<AppSettings>({
+    queryKey: ["app-settings"],
+    queryFn: () => api.get("/api/settings"),
+  });
+  const [perm, setPerm] = useState<"granted" | "denied" | "prompt">("prompt");
+
+  useEffect(() => {
+    void checkNotifPermission().then(setPerm);
+  }, []);
+
+  const notif = settings?.notif;
+
+  const update = useMutation({
+    mutationFn: (patch: Partial<NotifSettings>) => api.put("/api/settings", { notif: patch }),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["app-settings"] });
+      void syncInstallmentNotifications();
+    },
+    onError: (e: Error) => toast({ title: "خطا", description: e.message, variant: "destructive" }),
+  });
+
+  const ask = async () => {
+    const res = await requestNotifPermission();
+    setPerm(res);
+    if (res === "granted") {
+      toast({ title: "اجازه اعلان داده شد ✓", description: "سررسیدها ۲ روز قبل اعلام می‌شوند" });
+      void syncInstallmentNotifications();
+    } else if (res === "denied") {
+      toast({ title: "اجازه اعلان رد شد", description: "از تنظیمات گوشی ← برنامهٔ حساب‌یار فعال کنید", variant: "destructive" });
+    }
+  };
+
+  const test = async () => {
+    const ok = await fireTestNotification();
+    toast(ok ? { title: "اعلان آزمایشی ارسال شد — ۲ ثانیه دیگر می‌رسد" } : { title: "در مرورگر اعلان آزمایشی نداریم — در APK امتحان کنید", variant: "destructive" });
+  };
+
+  const dayOptions = [
+    { v: 0, label: "روز سررسید" },
+    { v: 1, label: "۱ روز قبل" },
+    { v: 2, label: "۲ روز قبل (پیشنهادی)" },
+    { v: 3, label: "۳ روز قبل" },
+    { v: 5, label: "۵ روز قبل" },
+    { v: 7, label: "۱ هفته قبل" },
+  ];
+  const hourOptions = [8, 9, 10, 12, 15, 18, 20, 21].map((h) => ({ v: h, label: `${h.toLocaleString("fa-IR", { useGrouping: false })}:۰۰` }));
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="flex items-center gap-2 text-base">
+          <BellRing className="h-5 w-5 text-emerald-700 dark:text-emerald-400" />
+          یادآور اقساط و چک‌ها
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex items-center justify-between">
+          <span className="text-sm">یادآور اعلان سررسید</span>
+          <Switch
+            checked={notif?.enabled ?? true}
+            onCheckedChange={(v) => update.mutate({ enabled: v })}
+            aria-label="یادآور اعلان"
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-2">
+          <div className="grid gap-1.5">
+            <Label className="text-xs text-muted-foreground">چه زمانی اعلان بدهد؟</Label>
+            <Select
+              value={String(notif?.daysBefore ?? 2)}
+              onValueChange={(v) => update.mutate({ daysBefore: Number(v) })}
+            >
+              <SelectTrigger className="h-9 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {dayOptions.map((o) => (
+                  <SelectItem key={o.v} value={String(o.v)}>{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+          <div className="grid gap-1.5">
+            <Label className="text-xs text-muted-foreground">ساعت اعلان</Label>
+            <Select value={String(notif?.hour ?? 9)} onValueChange={(v) => update.mutate({ hour: Number(v) })}>
+              <SelectTrigger className="h-9 text-xs">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent className="max-h-56">
+                {hourOptions.map((o) => (
+                  <SelectItem key={o.v} value={String(o.v)}>{o.label}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <div className="flex items-center justify-between rounded-xl border p-3">
+          <div className="min-w-0 pl-2">
+            <div className="text-sm">هشدار قرمز کمبود موجودی</div>
+            <p className="text-[11px] leading-4 text-muted-foreground">
+              اگر موجودی حساب مرتبط کمتر از مبلغ قسط باشد، با رنگ قرمز هشدار بده
+            </p>
+          </div>
+          <Switch
+            checked={notif?.lowBalanceWarn ?? true}
+            onCheckedChange={(v) => update.mutate({ lowBalanceWarn: v })}
+            aria-label="هشدار کمبود موجودی"
+          />
+        </div>
+
+        {notifSupported() ? (
+          <div className="flex flex-wrap items-center gap-2">
+            {perm !== "granted" && (
+              <Button size="sm" className="bg-emerald-700 hover:bg-emerald-800" onClick={() => void ask()}>
+                اجازه اعلان از گوشی
+              </Button>
+            )}
+            {perm === "granted" && (
+              <span className="flex items-center gap-1 text-[11px] text-emerald-700 dark:text-emerald-400">
+                <CheckCircle2 className="h-3.5 w-3.5" /> اجازه اعلان فعال است
+              </span>
+            )}
+            <Button variant="outline" size="sm" onClick={() => void test()}>
+              اعلان آزمایشی
+            </Button>
+          </div>
+        ) : (
+          <p className="rounded-lg bg-muted/60 p-2.5 text-[11px] leading-5 text-muted-foreground">
+            یادآور اعلان در اپلیکیشن اندروید (APK) کار می‌کند — در نسخهٔ مرورگر فقط هشدار داخل برنامه فعال است.
+          </p>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
+
 export function Settings() {
   return (
     <div className="mx-auto max-w-2xl space-y-4">
       <ThemeSection />
       <CurrencySection />
       <AutoCatSection />
+      <AiSection />
+      <NotificationsSection />
       <Backup />
       <UpdateSection />
       <Card>

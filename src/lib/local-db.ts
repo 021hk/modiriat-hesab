@@ -1,9 +1,10 @@
 // لایه داده محلی — IndexedDB روی خود دستگاه (کاملاً آفلاین، بدون سرور)
 // نسخه ۲.۲: نام دیتابیس جدید — داده‌های آزمایشی/نمونه نسخه‌های قبلی کنار گذاشته می‌شوند
 // و برنامه با داده‌های واقعی و خالی شروع می‌شود.
+// نسخه ۲ (v2.14): فروشگاه جدید «installments» — اقساط و چک‌ها
 
 const DB_NAME = "hesabyar-db";
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 
 export const STORES = {
   categories: "categories",
@@ -12,6 +13,7 @@ export const STORES = {
   debts: "debts",
   attachments: "attachments",
   smsLogs: "smsLogs",
+  installments: "installments",
   meta: "meta",
 } as const;
 
@@ -36,6 +38,7 @@ function openDb(): Promise<IDBDatabase> {
         STORES.debts,
         STORES.attachments,
         STORES.smsLogs,
+        STORES.installments,
       ];
       for (const name of idStores) {
         if (!db.objectStoreNames.contains(name)) db.createObjectStore(name, { keyPath: "id" });

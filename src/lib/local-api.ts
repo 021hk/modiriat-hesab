@@ -23,7 +23,12 @@ import type {
   Attachment,
   SmsLog,
   Stats,
+  Installment,
+  AppSettings,
+  AiSettings,
+  NotifSettings,
 } from "@/lib/client-api";
+import { DEFAULT_AI_SETTINGS as DEF_AI, DEFAULT_NOTIF_SETTINGS as DEF_NOTIF } from "@/lib/client-api";
 import {
   TX_KINDS,
   autoKind,
@@ -841,6 +846,145 @@ async function updateSmsLog(id: string, body: Record<string, unknown>): Promise<
   fail("عملیات نامعتبر");
 }
 
+// ─── اقساط و چک‌ها (v2.14) ───
+
+async function listInstallments(query: URLSearchParams): Promise<Installment[]> {
+  const status = query.get("status"); // upcoming | overdue | paid
+  const kind = query.get("kind"); // installment | check
+  let rows = await dbGetAll<Installment>(STORES.installments);
+  if (kind === "installment" || kind === "check") rows = rows.filter((r) => r.kind === kind);
+  if (status === "paid") rows = rows.filter((r) => r.paid);
+  else if (status === "upcoming" || status === "overdue") {
+    const paidOff = rows.filter((r) => !r.paid);
+    rows = status === "upcoming" ? paidOff.filter((r) => new Date(r.dueDate).getTime() >= Date.now()) : paidOff.filter((r) => new Date(r.dueDate).getTime() < Date.now());
+  }
+  // سررسید نزدیک اول؛ پرداخت‌شده‌ها آخر
+  rows.sort((a, b) => {
+    if (a.paid !== b.paid) return a.paid ? 1 : -1;
+    return a.dueDate < b.dueDate ? -1 : a.dueDate > b.dueDate ? 1 : 0;
+  });
+  // حساب پیوسته برای نمایش نام حساب و هشدار موجودی
+  const accounts = await dbGetAll<BankAccount>(STORES.bankAccounts);
+  return rows.map((r) => ({
+    ...r,
+    bankAccount: r.bankAccountId ? accounts.find((a) => a.id === r.bankAccountId) || null : null,
+  }));
+}
+
+function validInstallmentInput(body: Record<string, unknown>) {
+  const title = typeof body.title === "string" ? body.title.trim() : "";
+  if (!title) fail("عنوان قسط/چک الزامی است");
+  const kind = body.kind === "check" ? "check" : body.kind === "installment" ? "installment" : null;
+  if (!kind) fail("نوع باید قسط یا چک باشد");
+  const amount = num(body.amount);
+  if (!(amount > 0)) fail("مبلغ باید بزرگ‌تر از صفر باشد");
+  const dueDate = typeof body.dueDate === "string" ? body.dueDate : "";
+  const dueMs = Date.parse(dueDate);
+  if (!Number.isFinite(dueMs)) fail("تاریخ سررسید نامعتبر است");
+  return { title, kind, amount, dueDate: new Date(dueMs).toISOString() } as const;
+}
+
+async function createInstallment(body: Record<string, unknown>): Promise<Installment> {
+  const v = validInstallmentInput(body);
+  const row: Installment = {
+    id: newId(),
+    title: v.title,
+    kind: v.kind,
+    amount: v.amount,
+    dueDate: v.dueDate,
+    counterparty: (body.counterparty as string) || null,
+    bankAccountId: (body.bankAccountId as string) || null,
+    paid: Boolean(body.paid),
+    paidAt: null,
+    notes: (body.notes as string) || null,
+    createdAt: nowIso(),
+    updatedAt: nowIso(),
+  };
+  await dbPut(STORES.installments, row);
+  return row;
+}
+
+async function updateInstallment(id: string, body: Record<string, unknown>): Promise<Installment> {
+  const existing = await getOrThrow<Installment>(STORES.installments, id);
+  const updated: Installment = { ...existing, updatedAt: nowIso() };
+  if (body.title !== undefined) {
+    const title = String(body.title).trim();
+    if (!title) fail("عنوان نمی‌تواند خالی باشد");
+    updated.title = title;
+  }
+  if (body.kind !== undefined) {
+    if (body.kind !== "installment" && body.kind !== "check") fail("نوع باید قسط یا چک باشد");
+    updated.kind = body.kind;
+  }
+  if (body.amount !== undefined) {
+    const amount = num(body.amount);
+    if (!(amount > 0)) fail("مبلغ باید بزرگ‌تر از صفر باشد");
+    updated.amount = amount;
+  }
+  if (body.dueDate !== undefined) {
+    const dueMs = Date.parse(String(body.dueDate));
+    if (!Number.isFinite(dueMs)) fail("تاریخ سررسید نامعتبر است");
+    updated.dueDate = new Date(dueMs).toISOString();
+  }
+  if (body.counterparty !== undefined) updated.counterparty = (body.counterparty as string) || null;
+  if (body.bankAccountId !== undefined) updated.bankAccountId = (body.bankAccountId as string) || null;
+  if (body.notes !== undefined) updated.notes = (body.notes as string) || null;
+  if (body.paid !== undefined) {
+    updated.paid = Boolean(body.paid);
+    updated.paidAt = updated.paid ? existing.paidAt || nowIso() : null;
+  }
+  await dbPut(STORES.installments, updated);
+  return updated;
+}
+
+async function deleteInstallment(id: string): Promise<void> {
+  await getOrThrow<Installment>(STORES.installments, id);
+  await dbDelete(STORES.installments, id);
+}
+
+// ─── تنظیمات برنامه (کلید Gemini، اعلان‌ها) — روی خود دستگاه ذخیره می‌شود ───
+
+async function getAppSettings(): Promise<AppSettings> {
+  const [geminiApiKey, ai, notif] = await Promise.all([
+    getMeta<string>("geminiApiKey"),
+    getMeta<AiSettings>("aiSettings"),
+    getMeta<NotifSettings>("notifSettings"),
+  ]);
+  return {
+    geminiApiKey: geminiApiKey || null,
+    ai: { ...DEF_AI, ...(ai || {}) },
+    notif: { ...DEF_NOTIF, ...(notif || {}) },
+  };
+}
+
+async function updateAppSettings(body: Record<string, unknown>): Promise<AppSettings> {
+  if (body.geminiApiKey !== undefined) {
+    const key = typeof body.geminiApiKey === "string" ? body.geminiApiKey.trim() : null;
+    await setMeta("geminiApiKey", key || null);
+  }
+  if (body.ai !== undefined && typeof body.ai === "object" && body.ai) {
+    const cur = (await getMeta<AiSettings>("aiSettings")) || DEF_AI;
+    const b = body.ai as Record<string, unknown>;
+    await setMeta("aiSettings", {
+      ...cur,
+      apiKey: b.apiKey !== undefined ? (typeof b.apiKey === "string" && b.apiKey.trim() ? b.apiKey.trim() : null) : cur.apiKey,
+      speakReplies: b.speakReplies !== undefined ? Boolean(b.speakReplies) : cur.speakReplies,
+    } satisfies AiSettings);
+  }
+  if (body.notif !== undefined && typeof body.notif === "object" && body.notif) {
+    const cur = (await getMeta<NotifSettings>("notifSettings")) || DEF_NOTIF;
+    const b = body.notif as Record<string, unknown>;
+    const next: NotifSettings = {
+      enabled: b.enabled !== undefined ? Boolean(b.enabled) : cur.enabled,
+      daysBefore: b.daysBefore !== undefined ? Math.min(30, Math.max(0, Math.round(num(b.daysBefore)))) : cur.daysBefore,
+      hour: b.hour !== undefined ? Math.min(23, Math.max(0, Math.round(num(b.hour)))) : cur.hour,
+      lowBalanceWarn: b.lowBalanceWarn !== undefined ? Boolean(b.lowBalanceWarn) : cur.lowBalanceWarn,
+    };
+    await setMeta("notifSettings", next);
+  }
+  return getAppSettings();
+}
+
 // ─── آمار داشبورد ───
 
 async function getStats(): Promise<Stats> {
@@ -958,22 +1102,24 @@ interface BackupData {
   debts?: Record<string, unknown>[];
   attachments?: Record<string, unknown>[];
   smsLogs?: Record<string, unknown>[];
+  installments?: Record<string, unknown>[]; // v2.14 — اقساط و چک‌ها
 }
 
 async function exportBackup(): Promise<Record<string, unknown>> {
-  const [categories, bankAccounts, transactions, debts, attachments, smsLogs] = await Promise.all([
+  const [categories, bankAccounts, transactions, debts, attachments, smsLogs, installments] = await Promise.all([
     dbGetAll(STORES.categories),
     dbGetAll(STORES.bankAccounts),
     dbGetAll(STORES.transactions),
     dbGetAll(STORES.debts),
     dbGetAll(STORES.attachments),
     dbGetAll(STORES.smsLogs),
+    dbGetAll(STORES.installments),
   ]);
   return {
     app: "modiriat-hesab",
     version: 1,
     exportedAt: nowIso(),
-    data: { categories, bankAccounts, transactions, debts, attachments, smsLogs },
+    data: { categories, bankAccounts, transactions, debts, attachments, smsLogs, installments },
   };
 }
 
@@ -1079,6 +1225,21 @@ async function importBackup(backupInput: Record<string, unknown>): Promise<{ ok:
     });
   }
 
+  for (const inst of d.installments || []) {
+    const dueMs = Date.parse(String(inst.dueDate || ""));
+    if (!Number.isFinite(dueMs)) continue;
+    await dbPut(STORES.installments, {
+      ...inst,
+      id: inst.id && typeof inst.id === "string" ? inst.id : newId(),
+      amount: num(inst.amount),
+      kind: inst.kind === "check" ? "check" : "installment",
+      paid: Boolean(inst.paid),
+      dueDate: new Date(dueMs).toISOString(),
+      createdAt: inst.createdAt ? new Date(String(inst.createdAt)).toISOString() : nowIso(),
+      updatedAt: inst.updatedAt ? new Date(String(inst.updatedAt)).toISOString() : nowIso(),
+    });
+  }
+
   const counts = {
     categories: (d.categories || []).length,
     bankAccounts: (d.bankAccounts || []).length,
@@ -1086,6 +1247,7 @@ async function importBackup(backupInput: Record<string, unknown>): Promise<{ ok:
     debts: (d.debts || []).length,
     attachments: (d.attachments || []).length,
     smsLogs: (d.smsLogs || []).length,
+    installments: (d.installments || []).length,
   };
   // پشتیبان ممکن است از نسخه قدیمی باشد — مهاجرت شخص‌محور دوباره اجرا می‌شود
   await setMeta("schemaVersion", 2);
@@ -1146,6 +1308,14 @@ export async function localRequest<T>(method: string, url: string, body?: unknow
         GET: () => listAutoCatRules(),
         POST: (q, b) => createAutoCatRule(b),
       },
+      installments: {
+        GET: (q) => listInstallments(q),
+        POST: (q, b) => createInstallment(b),
+      },
+      settings: {
+        GET: () => getAppSettings(),
+        PUT: (q, b) => updateAppSettings(b),
+      },
     };
 
     if (resource === "backup" && m === "POST") handler = table.backup.POST;
@@ -1168,6 +1338,7 @@ export async function localRequest<T>(method: string, url: string, body?: unknow
         debts: { PUT: (q, b) => updateDebt(id, b), DELETE: () => deleteDebt(id) },
         sms: { PUT: (q, b) => updateSmsLog(id, b), DELETE: async () => { await dbDelete(STORES.smsLogs, id); return { ok: true }; } },
         "auto-cat-rules": { PUT: (q, b) => updateAutoCatRule(id, b), DELETE: () => deleteAutoCatRule(id) },
+        installments: { PUT: (q, b) => updateInstallment(id, b), DELETE: () => deleteInstallment(id) },
       };
       handler = crud[resource]?.[m] || null;
     } else {

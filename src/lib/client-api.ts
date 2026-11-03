@@ -91,6 +91,57 @@ export interface SmsLog {
 }
 
 // قانون دسته‌بندی خودکار با مبلغ (v2.13) — مبلغ‌ها به ریال ذخیره می‌شوند
+export type InstallmentKind = "installment" | "check"; // قسط | چک
+
+/** اقساط و چک‌ها (v2.14) — سررسید + هشدار اعلان ۲ روز قبل + هشدار قرمز کمبود موجودی */
+export interface Installment {
+  id: string;
+  title: string;
+  kind: InstallmentKind; // قسط یا چک
+  amount: number; // ریال
+  dueDate: string; // ISO — تاریخ سررسید
+  counterparty?: string | null; // بانک/طرف حساب (مثلاً «بانک مسکن»)
+  bankAccountId?: string | null; // حساب مرتبط — برای هشدار موجودی و ثبت تراکنش پرداخت
+  bankAccount?: BankAccount | null; // (فقط در پاسخ لیست) حساب پیوسته برای نمایش
+  paid: boolean;
+  paidAt?: string | null;
+  notes?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** تنظیمات اعلان اقساط/چک (v2.14) */
+export interface NotifSettings {
+  enabled: boolean; // یادآور اعلان روشن باشد؟
+  daysBefore: number; // چند روز قبل سررسید اعلان بده (پیش‌فرض ۲)
+  hour: number; // ساعت اعلان در آن روز (۰..۲۳)
+  lowBalanceWarn: boolean; // هشدار قرمز وقتی موجودی حساب کمتر از مبلغ قسط است
+}
+
+/** تنظیمات دستیار هوشمند (Gemini) */
+export interface AiSettings {
+  apiKey: string | null; // کلید Gemini — در خود دستگاه ذخیره می‌شود
+  speakReplies: boolean; // پاسخ با صدا خوانده شود؟ (حالت گفتمان)
+}
+
+export interface AppSettings {
+  geminiApiKey: string | null;
+  ai: AiSettings;
+  notif: NotifSettings;
+}
+
+export const DEFAULT_NOTIF_SETTINGS: NotifSettings = {
+  enabled: true,
+  daysBefore: 2,
+  hour: 9,
+  lowBalanceWarn: true,
+};
+
+export const DEFAULT_AI_SETTINGS: AiSettings = {
+  apiKey: null,
+  speakReplies: false,
+};
+
 export type { AutoCatRule } from "@/lib/auto-cat";
 
 export interface Stats {

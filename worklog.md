@@ -317,3 +317,24 @@ Work Log:
 Stage Summary:
 - برنامه حالا روی گوشی‌های نوتش‌دار هدرش زیر دوربین نمی‌رود؛ مبلغ‌های تکراری (مثل اجاره یا خرید ماهانه) خودکار دسته می‌گیرند — هم دستی هم پیامکی؛ و لیست تراکنش‌ها با یک کلیک به اکسل می‌رود
 - لینک: https://github.com/021hk/modiriat-hesab/releases/download/v2.13.0/hesab-yar-v2.13.0.apk
+
+---
+Task ID: 21
+Agent: Main Agent (Super Z)
+Task: v2.14.0 — سه درخواست کاربر: گوی هوشمند Gemini (گفتگو + اجرای خودکار دستورها)، اقساط و چک با اعلان گوشی (۲ روز قبل + هشدار قرمز موجودی)، تفکیک مطمئن‌تر چند حساب از یک شمارهٔ بانک
+
+Work Log:
+- (۱) گوی هوشمند: components/hesab/ai-orb.tsx — گوی سبز سه‌بعدی شناور (radial-gradient + سایه داخلی) قابل جابه‌جایی با انگشت (pointer events + آستانهٔ کلیک/درگ ۷px + ذخیره موقعیت در localStorage کلید aiOrbPos + clamp داخل ویوپورت و بالای ناوبری پایین)؛ نشان قرمز تعداد اقساط نزدیک («خودش خبر می‌دهد»)؛ پنل گفتگو RTL که به موقعیت گوی می‌چسبد
+- پروتکل: lib/ai/gemini.ts — callGemini با responseMimeType JSON (مدل gemini-2.0-flash، هدر x-goog-api-key) + buildSystemPrompt (قرارداد {"reply","actions"} + چهار اقدام + تبدیل تومان→ریال) + buildDataContext (حساب‌ها/دسته‌ها/آمار/اقساط/قوانین) + parseAiResponse (تحمل ``` و متن دور JSON) + geminiErrorToPersian (۴۰۰/۴۰۱/۴۲۹/۴۳۰/۵۰۰)
+- اجرای اقدام: lib/ai/actions.ts — validateAiAction خالص (categorize_by_range / create_rule / add_transaction / add_installment) + executeAiAction روی api محلی (انتقال دسته فقط تراکنش‌های بدون دسته مگر overwrite:true — تراکنش بدهی/طلب دست نمی‌خورد) + describeAiAction فارسی؛ نتایج به متن پاسخ چسبیده و invalidateQueries می‌شوند
+- گفتگو صوتی: تشخیص گفتار با @capacitor-community/speech-recognition (fa-IR، partialResults + auto-send) با fallback به Web Speech API در مرورگر؛ خواندن پاسخ با @capacitor-community/text-to-speech (کلید Volume در هدر پنل، ذخیره در تنظیمات ai.speakReplies) با fallback speechSynthesis؛ در WebView بدون پشتیبانی، پیام فارسی راهنما
+- (۲) اقساط و چک: مدل Installment (title/kind قسط|چک/amount ریال/dueDate/counterparty/bankAccountId/paid) + فروشگاه جدید installments (DB_VERSION=2) + CRUD /api/installments (لیست با پیوستن bankAccount و فیلتر status/kind) + ورود در پشتیبان‌گیری (خروجی و ورودی)
+- تب جدید «اقساط و چک» (ناوبری ۷تایی با برچسب کوتاه موبایل): خلاصهٔ سه‌تایی (پرداخت‌نشده/گذشته/نزدیک) + نوار نزدیک‌ترین سررسید + فیلتر وضعیت/نوع + کارت‌ها با نشان قسط/چک، روز مانده/گذشته، تاریخ جلالی + هشدار قرمز «موجودی کافی نیست» (مقایسهٔ موجودی حساب از stats با مبلغ — قابل خاموش‌کردن) + دیالوگ ثبت/ویرایش با تقویم جلالی مشترک (jalali-picker.tsx منتقل‌شده از transactions) + «پرداخت شد» با تیک ثبت همزمان تراکنش هزینه در حساب مرتبط (تست شد: تراکنش ساخته شد) + «برگرداندن به پیش‌رو»
+- اعلان‌ها: lib/notifications.ts — computeNotifyAt خالص (سررسید − daysBefore روز در ساعت تنظیمی؛ اگر گذشته باشد → فوری +۱دقیقه؛ بعد از سررسید → هیچ) + planInstallmentNotifications (حداکثر ۴۰، id پایدار از hash تا دوباره‌زمان‌بندی جایگزین کند نه تکرار) + applyNotificationPlan با @capacitor/local-notifications + syncInstallmentNotifications هنگام باز شدن برنامه و بعد از هر تغییر قسط/تنظیمات
+- تنظیمات: کارت «یادآور اقساط و چک‌ها» (روشن/خاموش + تعداد روز ۰/۱/۲/۳/۵/۷ + ساعت + هشدار قرمز + دکمهٔ اجازه اعلان و اعلان آزمایشی) و کارت «دستیار هوشمند (Gemini)» (ذخیره/حذف کلید با ماسک + لینک aistudio.google.com/apikey) — ذخیره در meta از مسیر /api/settings (GET/PUT)
+- (۳) تفکیک چند حساب: sms-match.ts بازنویسی matchAccountByRef با امتیازدهی scoreAccountRefMatch (تطبیق کامل ۱۰۰۰+، پسوند هرچه بلندتر امتیاز بیشتر) — قبلاً «اولین» حساب برنده بود و با چند حساب هم‌بانک ممکن بود حساب اشتباه انتخاب شود؛ تست‌های جدید: دو حساب یک شمارهٔ فرستنده، شناسهٔ گروهی، «ملت**XXXX»، حساب غریبه
+- پلاگین‌های بومی جدید: @capacitor/local-notifications@8.3.1 + @capacitor-community/speech-recognition@7.0.1 (peer >=7 سازگار با ۸) + @capacitor-community/text-to-speech@8.0.2 — npx cap sync سه‌تایی را ثبت کرد؛ REVIEW منبع پلاگین گفتار (استفادهٔ استاندارد از Plugin/PermissionState) — کامپایل محلی gradle به‌خاطر 429 موقت maven انجام نشد، بیلد نهایی با CI
+- محیط: build بعد از rm -rf src/app/api (باقی‌ماندهٔ Prisma دوباره ساخته شده بود)؛ ۷۰ تست جدید (۲۴ اقساط + ۳۰ دستیار + ۱۹ تفکیک) → مجموع ۴۰۵/۴۰۵ سبز؛ تایپ‌چک src صفر خطا
+- تأیید مرورگری (414×896 + 1440×900): ناوبری ۷تایی ✓ گوی ۳بعدی + نشان قرمز اقساط ✓ درگ گوی (۳۴۲,۷۴۴→۷۲,۵۰۲) و ماندگاری بعد از reload ✓ پنل چسبیده به گوی ✓ هشدار «کلید تنظیم نشده» ✓ ذخیرهٔ کلید تستی ✓ چت واقعی → خطای فارسی کلید نامعتبر از سرور Gemini ✓ تب اقساط: خلاصه/فیلتر/کارت/هشدار قرمز کمبود موجودی ✓ دیالوغ جلالی ✓ پرداخت + تراکنش هزینه همزمان ✓ تنظیمات: هر دو کارت جدید ✓ دسکتاپ: تب «اقساط و چک» و گوی گوشهٔ پایین ✓
+- نسخه‌ها: package.json 2.14.0 / versionCode 18 / versionName 2.14.0 / SW v19 (gen-sw هم v19) / فوتر و تنظیمات ۲.۱۴.۰ / فیکس `branches: [main]` در build-apk.yml
+- نکته مهم: توکن GitHub قبلی (در remote URL) توسط GitHub باطل شده (401 در API و push) — v2.13.0 از قبل منتشر و سالم است؛ برای انتشار v2.14.0 باید توکن جدید از کاربر گرفته و در remote URL گذاشته شود

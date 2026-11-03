@@ -1,28 +1,32 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Button } from "@/components/ui/button";
 import { useQuery } from "@tanstack/react-query";
-import { LayoutDashboard, ArrowLeftRight, HandCoins, Landmark, Tags, Settings as SettingsIcon, Wallet } from "lucide-react";
+import { LayoutDashboard, ArrowLeftRight, HandCoins, CalendarClock, Landmark, Tags, Settings as SettingsIcon, Wallet } from "lucide-react";
 import { Dashboard } from "@/components/hesab/dashboard";
 import { Transactions } from "@/components/hesab/transactions";
 import { Debts } from "@/components/hesab/debts";
+import { Installments } from "@/components/hesab/installments";
 import { Banks } from "@/components/hesab/banks";
 import { Categories } from "@/components/hesab/categories";
 import { Settings } from "@/components/hesab/settings";
 import { TxDialog } from "@/components/hesab/transactions";
+import { AiOrb } from "@/components/hesab/ai-orb";
 import { api, type Category, type BankAccount } from "@/lib/client-api";
 import { SmsBackgroundSync } from "@/components/hesab/sms-background-sync";
+import { syncInstallmentNotifications } from "@/lib/notifications";
 
 const TABS = [
-  { value: "dashboard", label: "داشبورد", icon: LayoutDashboard },
-  { value: "transactions", label: "تراکنش‌ها", icon: ArrowLeftRight },
-  { value: "debts", label: "بدهی‌ها", icon: HandCoins },
-  { value: "banks", label: "حساب و پیامک", icon: Landmark },
-  { value: "categories", label: "دسته‌بندی", icon: Tags },
-  { value: "settings", label: "تنظیمات", icon: SettingsIcon },
+  { value: "dashboard", label: "داشبورد", short: "داشبورد", icon: LayoutDashboard },
+  { value: "transactions", label: "تراکنش‌ها", short: "تراکنش", icon: ArrowLeftRight },
+  { value: "debts", label: "بدهی‌ها", short: "بدهی", icon: HandCoins },
+  { value: "installments", label: "اقساط و چک", short: "اقساط", icon: CalendarClock },
+  { value: "banks", label: "حساب و پیامک", short: "حساب", icon: Landmark },
+  { value: "categories", label: "دسته‌بندی", short: "دسته‌ها", icon: Tags },
+  { value: "settings", label: "تنظیمات", short: "تنظیمات", icon: SettingsIcon },
 ];
 
 function AppContent() {
@@ -32,6 +36,11 @@ function AppContent() {
 
   // همگام‌سازی پس‌زمینه پیامک‌های بانکی — باز شدن برنامه، بازگشت از پس‌زمینه، پیامک زنده (در هر تب)
   // منطق در SmsBackgroundSync است؛ اینجا فقط نصب می‌شود.
+
+  // یادآور اقساط/چک — هنگام باز شدن برنامه اعلان‌ها با تنظیمات فعلی همگام می‌شوند (فقط APK)
+  useEffect(() => {
+    void syncInstallmentNotifications();
+  }, []);
 
   const { data: categories } = useQuery<Category[]>({
     queryKey: ["categories"],
@@ -93,6 +102,9 @@ function AppContent() {
           <TabsContent value="debts">
             <Debts onQuickTx={(p) => { setTxPreset(p); setTxOpen(true); }} />
           </TabsContent>
+          <TabsContent value="installments">
+            <Installments />
+          </TabsContent>
           <TabsContent value="banks">
             <Banks onOpenTxDialog={() => setTxOpen(true)} />
           </TabsContent>
@@ -107,26 +119,29 @@ function AppContent() {
 
       {/* ناوبری پایین موبایل */}
       <nav className="fixed inset-x-0 bottom-0 z-20 border-t bg-background/95 backdrop-blur lg:hidden" style={{ paddingBottom: "env(safe-area-inset-bottom)" }}>
-        <div className="mx-auto grid max-w-lg grid-cols-6">
+        <div className="mx-auto grid max-w-lg grid-cols-7">
           {TABS.map((t) => (
             <button
               key={t.value}
               onClick={() => setTab(t.value)}
-              className={`flex min-h-14 flex-col items-center justify-center gap-0.5 px-1 py-1.5 text-[10px] transition ${
+              className={`flex min-h-14 flex-col items-center justify-center gap-0.5 px-0.5 py-1.5 text-[9px] leading-none transition ${
                 tab === t.value ? "text-emerald-700" : "text-muted-foreground"
               }`}
             >
               <t.icon className="h-5 w-5" />
-              {t.label}
+              {t.short}
             </button>
           ))}
         </div>
       </nav>
 
+      {/* گوی هوشمند — دستیار Gemini (قابل جابه‌جایی با انگشت) */}
+      <AiOrb onOpenSettings={() => setTab("settings")} />
+
       {/* فوتر */}
       <footer className="mt-auto hidden border-t bg-card py-4 lg:block">
         <div className="mx-auto max-w-6xl px-4 text-center text-xs text-muted-foreground">
-          حساب‌یار — نسخه ۲.۱۳.۰ | اپلیکیشن آفلاین — ثبت خودکار پیامک بانکی
+          حساب‌یار — نسخه ۲.۱۴.۰ | اپلیکیشن آفلاین — ثبت خودکار پیامک بانکی + دستیار هوشمند
         </div>
       </footer>
 
