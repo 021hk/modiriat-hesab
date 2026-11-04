@@ -52,7 +52,7 @@ import { ACCENTS, SPECIALS, applyAccent, applySpecial, readStoredAccent, readSto
 import { checkNotifPermission, requestNotifPermission, syncInstallmentNotifications, fireTestNotification, notifSupported } from "@/lib/notifications";
 import type { AppSettings, NotifSettings } from "@/lib/client-api";
 
-const APP_VERSION = "۲.۱۵.۱";
+const APP_VERSION = "۲.۱۵.۲";
 
 function ThemeSection() {
   const { theme, setTheme } = useTheme();

@@ -12,6 +12,7 @@ import {
   probeGoogleReachable,
   resetGeminiModelCache,
   splitApiKeys,
+  testGeminiConnection,
   PROXY_NET_FAIL_MSG,
   type AiChatMessage,
 } from "../src/lib/ai/gemini";
@@ -158,6 +159,121 @@ let keyCalls = 0;
   const r = await callGemini({ apiKey: "KEYAINVALID00,KEYBINVALID00", systemPrompt: "s", history: HIST });
   check("چند کلید + شبکه قطع: پیام شبکه", r.ok === false && r.text === GEMINI_NET_FAIL_MSG, true);
   check("چند کلید + شبکه قطع: فقط کلید اول امتحان شد", netCalls2, GEMINI_NET_ATTEMPTS);
+}
+
+// ─── مدل بازنشسته (v2.15.2) — بازسازی دقیق سناریوی لاگ کاربر ───
+
+// حالت: مدل پیش‌فرض 404 «no longer available» می‌دهد و گوگل در متن خطا مدل جدید پیشنهاد می‌کند
+{
+  resetGeminiModelCache();
+  const called: string[] = [];
+  (globalThis as { fetch: unknown }).fetch = (async (url: string | URL | Request) => {
+    const u = typeof url === "string" ? url : url instanceof URL ? url.href : String(url);
+    if (u.includes(":generateContent")) {
+      const m = /models\/([^:]+):/.exec(u)?.[1] || "";
+      called.push(m);
+      if (m === "gemini-4.2-flash") {
+        return new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"reply":"مدل جدید","actions":[]}' }] } }] }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return new Response(
+        JSON.stringify({ error: { message: `This model models/${m} is no longer available. Please update your code to use models/gemini-4.2-flash for the latest features and improvements.` } }),
+        { status: 404 }
+      );
+    }
+    // فهرست مدل‌ها — گوگل اسم مدل‌های بازنشسته را هم هنوز برمی‌گرداند (همان رفتار واقعی)
+    return new Response(
+      JSON.stringify({
+        models: [
+          { name: "models/gemini-2.0-flash", supportedGenerationMethods: ["generateContent"] },
+          { name: "models/gemini-2.5-flash", supportedGenerationMethods: ["generateContent"] },
+          { name: "models/gemini-flash-latest", supportedGenerationMethods: ["generateContent"] },
+          { name: "models/gemini-4.2-flash", supportedGenerationMethods: ["generateContent"] },
+        ],
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  }) as typeof fetch;
+  const r = await callGemini({ apiKey: "KEYRETIRED000000", systemPrompt: "s", history: HIST });
+  check("مدل بازنشسته: موفق", r.ok, true);
+  check("مدل بازنشسته: پاسخ مدل پیشنهادی گوگل", r.text.includes("مدل جدید"), true);
+  check("مدل بازنشسته: اول پیش‌فرض 404 خورد", called[0], "gemini-3.8-flash");
+  check("مدل بازنشسته: بعد پیشنهاد گوگل امتحان شد", called[1], "gemini-4.2-flash");
+}
+
+// حالت: 503 «high demand» نباید کل زنجیره را متوقف کند — مدل بعدی امتحان می‌شود
+{
+  resetGeminiModelCache();
+  const called: string[] = [];
+  (globalThis as { fetch: unknown }).fetch = (async (url: string | URL | Request) => {
+    const u = typeof url === "string" ? url : url instanceof URL ? url.href : String(url);
+    if (u.includes(":generateContent")) {
+      const m = /models\/([^:]+):/.exec(u)?.[1] || "";
+      called.push(m);
+      if (m === "gemini-2.5-flash") {
+        return new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"reply":"مدل جایگزین","actions":[]}' }] } }] }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      return new Response(
+        JSON.stringify({ error: { message: "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.", status: "UNAVAILABLE" } }),
+        { status: 503 }
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        models: [
+          { name: "models/gemini-flash-latest", supportedGenerationMethods: ["generateContent"] },
+          { name: "models/gemini-2.5-flash", supportedGenerationMethods: ["generateContent"] },
+          { name: "models/gemini-2.0-flash", supportedGenerationMethods: ["generateContent"] },
+        ],
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  }) as typeof fetch;
+  const r = await callGemini({ apiKey: "KEYBUSY00000000", systemPrompt: "s", history: HIST });
+  check("503: موفق با مدل بعدی", r.ok, true);
+  check("503: پاسخ مدل جایگزین", r.text.includes("مدل جایگزین"), true);
+  check("503: ترتیب امتحان 3.8→flash-latest→2.5", called.join(">"), "gemini-3.8-flash>gemini-flash-latest>gemini-2.5-flash");
+}
+
+// حالت: تست اتصال باید مدل بازنشستهٔ فهرست را با پینگ رد کند و مدل واقعاً زنده را برگزاند
+{
+  resetGeminiModelCache();
+  (globalThis as { fetch: unknown }).fetch = (async (url: string | URL | Request) => {
+    const u = typeof url === "string" ? url : url instanceof URL ? url.href : String(url);
+    if (u.includes(":generateContent")) {
+      const m = /models\/([^:]+):/.exec(u)?.[1] || "";
+      if (m === "gemini-3.8-flash") {
+        return new Response(
+          JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"reply":"پینگ","actions":[]}' }] } }] }),
+          { status: 200, headers: { "Content-Type": "application/json" } }
+        );
+      }
+      // همهٔ مدل‌های دیگر «لیست‌شده ولی بازنشسته» — همان تلهٔ واقعی گوگل
+      return new Response(
+        JSON.stringify({ error: { message: `This model models/${m} is no longer available to new users.` } }),
+        { status: 404 }
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        models: [
+          { name: "models/gemini-2.5-flash", supportedGenerationMethods: ["generateContent"] },
+          { name: "models/gemini-flash-latest", supportedGenerationMethods: ["generateContent"] },
+          { name: "models/gemini-3.8-flash", supportedGenerationMethods: ["generateContent"] },
+        ],
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  }) as typeof fetch;
+  const t = await testGeminiConnection("KEYPINGTEST0000");
+  check("پینگ تست اتصال: موفق", t.ok, true);
+  check("پینگ تست اتصال: مدل زنده انتخاب شد", t.model, "gemini-3.8-flash");
+  check("پینگ تست اتصال: برچسب آزموده‌شده", t.message.includes("آزموده شد"), true);
 }
 
 // ─── پروکسی شخصی (v2.15) ───

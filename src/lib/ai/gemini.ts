@@ -9,15 +9,15 @@
 import { clipBody, maskKey, pushGeminiLog } from "./gemini-log";
 
 export const GEMINI_MODELS = [
-  "gemini-2.0-flash",
-  "gemini-2.5-flash",
+  "gemini-3.8-flash",
+  "gemini-3.8-flash-lite",
   "gemini-flash-latest",
-  "gemini-2.0-flash-lite",
-  "gemini-2.5-flash-lite",
-  "gemini-1.5-flash",
+  "gemini-flash-lite-latest",
+  "gemini-2.5-flash",
+  "gemini-2.0-flash",
 ] as const;
 
-export const GEMINI_MODEL = GEMINI_MODELS[0]; // پیش‌فرض — برای سازگاری قدیمی
+export const GEMINI_MODEL = GEMINI_MODELS[0]; // پیش‌فرض — نسل فعلی گوگل (قدیمی‌ها آخر برای کلیدهای قدیمی)
 
 // ─── پروکسی شخصی (v2.15) ───
 // چون گوگل دسترسی Gemini را از ایران محدود کرده و بعضی VPNها هم IPهایشان مسدود است،
@@ -139,8 +139,11 @@ export function buildGeminiBody(model: string, systemPrompt: string, history: Ai
     maxOutputTokens: 1024,
     responseMimeType: "application/json",
   };
-  // فقط مدل‌های ۲.۵ حالت «تفکر» دارند که پاسخ را خیلی کند می‌کند — خاموشش می‌کنیم (v2.14.3)
-  if (/2\.5/.test(model)) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  // فقط مدل‌های ۲.۵ به بالا حالت «تفکر» دارند که پاسخ را خیلی کند می‌کند — خاموشش می‌کنیم
+  // (v2.15.2: بررسی عددی نسخه — gemini-3.8 هم شامل می‌شود؛ نام‌های مستعار بدون نسخه دست نمی‌خورند)
+  const vm = /(\d+)\.(\d+)/.exec(model);
+  const ver = vm ? { major: parseInt(vm[1], 10), minor: parseInt(vm[2], 10) } : null;
+  if (ver && (ver.major > 2 || (ver.major === 2 && ver.minor >= 5))) generationConfig.thinkingConfig = { thinkingBudget: 0 };
   return {
     system_instruction: { parts: [{ text: systemPrompt }] },
     contents: history.map((h) => ({ role: h.role, parts: [{ text: h.text }] })),
@@ -188,19 +191,61 @@ export function parseModelsList(json: unknown): GeminiModelInfo[] {
     }));
 }
 
-/** از فهرست مدل‌های موجود، بهترین مدل flash را انتخاب می‌کند — خالص و قابل‌تست */
-export function pickGeminiModel(available: GeminiModelInfo[]): string | null {
-  const usable = available.filter((m) => m.supportsGenerate).map((m) => m.name);
-  if (usable.length === 0) return null;
-  for (const pref of GEMINI_MODELS) if (usable.includes(pref)) return pref;
-  const flash = usable.find((n) => n.includes("flash"));
-  if (flash) return flash;
-  return usable[0];
-}
-
 /** مدل روی این دستگاه که در تماس قبلی جواب داده */
 export function cachedGeminiModel(): string | null {
   return readCachedModel();
+}
+
+/** مدل‌های غیرگفتگویی از کاندیدها حذف می‌شوند */
+const NON_CHAT_MODEL = /embed|aqa|imagen|image|veo|tts|audio|live|native|gemma/i;
+
+/** رتبهٔ نسخه برای مرتب‌سازی — جدیدتر اول، سپس flash، سپس بدون پسوند آزمایشی */
+function modelRank(name: string): { major: number; minor: number; penalty: number } {
+  const m = /(\d+)\.(\d+)/.exec(name);
+  let penalty = 0;
+  if (/lite/i.test(name)) penalty += 1;
+  if (/pro/i.test(name)) penalty += 1; // flash مقدم بر pro در نسخهٔ برابر
+  if (/preview|exp/i.test(name)) penalty += 3;
+  if (!m) penalty += 5; // نام‌های مستعار (مثل flash-latest) بعد از نسخه‌دارهای پایدار
+  return { major: m ? parseInt(m[1], 10) : 0, minor: m ? parseInt(m[2], 10) : 0, penalty };
+}
+
+/**
+ * از فهرست مدل‌های موجود، ترتیب امتحانِ هوشمند می‌سازد (v2.15.2):
+ * ۱) مدل‌های ترجیحی سرِ فهرست، ۲) بعدی‌ها از نسخهٔ جدید به قدیم (flash مقدم بر pro/lite).
+ * لیست گوگل گاهی مدل‌های بازنشسته را هم نشان می‌دهد — پینگ واقعی در «تست اتصال» جبران می‌کند.
+ */
+export function orderModelCandidates(available: GeminiModelInfo[]): string[] {
+  const usable = Array.from(new Set(available.filter((m) => m.supportsGenerate).map((m) => m.name)));
+  const chat = usable.filter((n) => /gemini/i.test(n) && /flash|pro/i.test(n) && !NON_CHAT_MODEL.test(n));
+  const prefs = (GEMINI_MODELS as readonly string[]).filter((p) => chat.includes(p));
+  const rest = chat.filter((n) => !(GEMINI_MODELS as readonly string[]).includes(n));
+  rest.sort((a, b) => {
+    const ra = modelRank(a);
+    const rb = modelRank(b);
+    if (ra.major !== rb.major) return rb.major - ra.major;
+    if (ra.minor !== rb.minor) return rb.minor - ra.minor;
+    if (ra.penalty !== rb.penalty) return ra.penalty - rb.penalty;
+    return a.localeCompare(b);
+  });
+  return [...prefs, ...rest];
+}
+
+/** بهترین مدل flash از فهرست — همان سرِ ترتیب هوشمند */
+export function pickGeminiModel(available: GeminiModelInfo[]): string | null {
+  const all = orderModelCandidates(available);
+  if (all.length === 0) {
+    // هیچ مدل گفتگویی نبود — مثل قبل اولین generateContent را بده
+    const usable = available.filter((m) => m.supportsGenerate).map((m) => m.name);
+    return usable.length > 0 ? usable[0] : null;
+  }
+  return all[0];
+}
+
+/** پیشنهاد مدل جایگزین از متن خطای 404 گوگل — «use models/gemini-3.8-flash» (v2.15.2) */
+export function suggestedModelFromError(body: string): string | null {
+  const m = /use models\/([a-z0-9._-]+)/i.exec(String(body || ""));
+  return m ? m[1] : null;
 }
 
 /** پاک کردن مدل کش‌شده — بعد از تغییر کلید یا خطای 404 */
@@ -264,6 +309,12 @@ export interface GeminiTestResult {
   message: string; // پیام فارسی برای نمایش
 }
 
+/** بدنهٔ سبک برای آزمودن واقعی مدل در «تست اتصال» — پینگ ۱۶ توکنی (v2.15.2) */
+const PING_BODY: Record<string, unknown> = {
+  contents: [{ role: "user", parts: [{ text: "ping" }] }],
+  generationConfig: { maxOutputTokens: 16 },
+};
+
 /** دکمه «تست اتصال» تنظیمات — همهٔ کلیدها را می‌آزماید و مدل مناسب را پیدا و کش می‌کند (چند کلید: v2.15) */
 export async function testGeminiConnection(apiKey: string): Promise<GeminiTestResult> {
   const keys = splitApiKeys(apiKey);
@@ -276,11 +327,42 @@ export async function testGeminiConnection(apiKey: string): Promise<GeminiTestRe
   });
   const results = await Promise.all(keys.map((k, i) => listGeminiModels(k, `کلید ${(i + 1).toLocaleString("fa-IR", { useGrouping: false })}`)));
   const okIdx = results.findIndex((r) => r.ok);
-  const model = okIdx > -1 ? pickGeminiModel(results[okIdx].models) : null;
-  if (okIdx === -1 || !model) {
+  if (okIdx === -1) {
     const firstFail = results.find((r) => !r.ok);
     pushGeminiLog({ level: "error", phase: "system", msg: "تست اتصال ناموفق — هیچ کلیدی وصل نشد", detail: `keys=${keys.length}` });
     return { ok: false, model: null, message: firstFail?.message || "هیچ مدلی با این کلیدها قابل استفاده نیست — کلید جدیدی بگیرید." };
+  }
+  // مدل انتخابی باید واقعاً پاسخ بدهد — لیست گوگل گاهی مدل‌های بازنشسته را هم نشان می‌دهد (v2.15.2)
+  // پینگ سبک (حداکثر ۴ کاندید، ۱۶ توکن): اولین مدلی که واقعاً جواب داد برنده است.
+  const candidates = orderModelCandidates(results[okIdx].models).slice(0, 4);
+  const testKey = keys[okIdx];
+  let model: string | null = null;
+  let pingTried = false;
+  for (const cand of candidates) {
+    const ping = await doCallOnce(cand, PING_BODY, testKey);
+    if (ping === null) break; // شبکه/تایم‌اوت — ادامهٔ پینگ بی‌فایده است
+    pingTried = true;
+    if (ping.ok) {
+      model = cand;
+      break;
+    }
+    if (ping.status === 401 || ping.status === 403 || ping.status === 429) break; // مشکل از کلید است نه مدل
+    // 404 (بازنشسته) / 503 (شلوغ) و بقیه → کاندید بعدی لیست
+  }
+  let pingNote = "";
+  if (model) {
+    pushGeminiLog({ level: "ok", phase: "system", msg: `مدل «${model}» با پینگ واقعی تأیید شد`, detail: "test-connection ping ok" });
+    pingNote = " (آزموده شد)";
+  } else {
+    // پینگ ممکن نشد — مثل قبل از سرِ ترتیب فهرست انتخاب می‌شود
+    model = pickGeminiModel(results[okIdx].models);
+    if (model && pingTried) {
+      pushGeminiLog({ level: "warn", phase: "system", msg: `پینگ مدل‌ها موفق نشد — مدل «${model}» فقط از فهرست انتخاب شد`, detail: "ping failed for all candidates" });
+    }
+  }
+  if (!model) {
+    pushGeminiLog({ level: "error", phase: "system", msg: "هیچ مدلی برای این کلید قابل استفاده نبود", detail: `models=${results[okIdx].models.length}` });
+    return { ok: false, model: null, message: "هیچ مدلی با این کلیدها قابل استفاده نیست — کلید جدیدی بگیرید." };
   }
   writeCachedModel(model);
   const okCount = results.filter((r) => r.ok).length;
@@ -289,7 +371,7 @@ export async function testGeminiConnection(apiKey: string): Promise<GeminiTestRe
     keys.length > 1
       ? ` کلیدها: ${okCount.toLocaleString("fa-IR", { useGrouping: false })} سالم از ${keys.length.toLocaleString("fa-IR", { useGrouping: false })}.`
       : "";
-  return { ok: true, model, message: `اتصال موفق است ✓ — مدل «${model}» آماده گفتگو است.${keyInfo}` };
+  return { ok: true, model, message: `اتصال موفق است ✓ — مدل «${model}»${pingNote} آماده گفتگو است.${keyInfo}` };
 }
 
 export interface AiChatMessage {
@@ -392,48 +474,71 @@ export interface GeminiCallResult {
   text: string; // پاسخ خام مدل یا پیام خطا
 }
 
+function hasThinkingConfig(body: Record<string, unknown>): boolean {
+  const g = body.generationConfig as Record<string, unknown> | undefined;
+  return !!g && g.thinkingConfig != null;
+}
+
+function stripThinkingConfig(body: Record<string, unknown>): Record<string, unknown> {
+  const g = { ...((body.generationConfig as Record<string, unknown>) || {}) };
+  delete g.thinkingConfig;
+  return { ...body, generationConfig: g };
+}
+
 /**
  * یک فراخوانی مدل با سقف زمانی (v2.14.3) — خطای شبکه null برمی‌گرداند.
+ * v2.15.2: بدنهٔ خام خطا (rawBody) برای استخراج پیشنهاد مدل گوگل + تلاشِ بدون thinkingConfig روی 400.
  */
-async function doCallOnce(model: string, body: Record<string, unknown>, apiKey: string): Promise<{ status: number; ok: boolean; text: string } | null> {
-  const ac = new AbortController();
-  const timer = setTimeout(() => ac.abort("timeout"), GEMINI_TIMEOUT_MS);
-  const t0 = Date.now();
-  try {
-    const res = await fetch(GEMINI_URL(model), {
-      method: "POST",
-      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
-      body: JSON.stringify(body),
-      signal: ac.signal,
-    });
-    const ms = Date.now() - t0;
-    if (res.ok) {
-      const json = (await res.json()) as {
-        candidates?: { content?: { parts?: { text?: string }[] } }[];
-        promptFeedback?: { blockReason?: string };
-      };
-      const parts = json.candidates?.[0]?.content?.parts || [];
-      const text = parts.map((p) => p.text || "").join("").trim();
-      if (!text) {
-        const blocked = json.promptFeedback?.blockReason;
-        const msg = blocked ? `درخواست توسط Gemini مسدود شد (${blocked})` : "پاسخی از Gemini نرسید — دوباره امتحان کنید.";
-        pushGeminiLog({ level: "error", phase: "call", msg, detail: `model=${model} status=${res.status} ${ms}ms` });
-        return { status: res.status, ok: false, text: msg };
+async function doCallOnce(model: string, body: Record<string, unknown>, apiKey: string): Promise<{ status: number; ok: boolean; text: string; rawBody?: string } | null> {
+  let current = body;
+  // حداکثر ۲ دور — دور دوم فقط وقتی مدل thinkingConfig را نپذیرد (400 با متن thinking)
+  for (let pass = 0; pass < 2; pass++) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort("timeout"), GEMINI_TIMEOUT_MS);
+    const t0 = Date.now();
+    try {
+      const res = await fetch(GEMINI_URL(model), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+        body: JSON.stringify(current),
+        signal: ac.signal,
+      });
+      const ms = Date.now() - t0;
+      if (res.ok) {
+        const json = (await res.json()) as {
+          candidates?: { content?: { parts?: { text?: string }[] } }[];
+          promptFeedback?: { blockReason?: string };
+        };
+        const parts = json.candidates?.[0]?.content?.parts || [];
+        const text = parts.map((p) => p.text || "").join("").trim();
+        if (!text) {
+          const blocked = json.promptFeedback?.blockReason;
+          const msg = blocked ? `درخواست توسط Gemini مسدود شد (${blocked})` : "پاسخی از Gemini نرسید — دوباره امتحان کنید.";
+          pushGeminiLog({ level: "error", phase: "call", msg, detail: `model=${model} status=${res.status} ${ms}ms` });
+          return { status: res.status, ok: false, text: msg };
+        }
+        pushGeminiLog({ level: "ok", phase: "call", msg: `پاسخ مدل «${model}» رسید`, detail: `status=200 ${ms}ms` });
+        return { status: res.status, ok: true, text };
       }
-      pushGeminiLog({ level: "ok", phase: "call", msg: `پاسخ مدل «${model}» رسید`, detail: `status=200 ${ms}ms` });
-      return { status: res.status, ok: true, text };
+      const t = await res.text().catch(() => "");
+      // بعضی مدل‌ها thinkingConfig را قبول نمی‌کنند — یک بار بدون آن امتحان می‌شود (v2.15.2)
+      if (pass === 0 && res.status === 400 && /thinking/i.test(t) && hasThinkingConfig(current)) {
+        pushGeminiLog({ level: "info", phase: "call", msg: `مدل «${model}» thinkingConfig را نپذیرفت — یک بار بدون آن امتحان می‌شود`, detail: clipBody(t, 120) });
+        current = stripThinkingConfig(current);
+        continue;
+      }
+      const persian = geminiErrorToPersian(res.status, t);
+      pushGeminiLog({ level: "error", phase: "call", msg: persian, detail: `model=${model} status=${res.status} ${ms}ms | ${clipBody(t)}` });
+      return { status: res.status, ok: false, text: persian, rawBody: t };
+    } catch (e) {
+      // خطای شبکه یا تایم‌اوت — بیرون دوباره امتحان/گزارش می‌شود
+      pushGeminiLog({ level: "warn", phase: "call", msg: `مدل «${model}» پاسخ نداد (خطای شبکه یا تایم‌اوت)`, detail: `${Date.now() - t0}ms ${abortReason(e, ac)}` });
+      return null;
+    } finally {
+      clearTimeout(timer);
     }
-    const t = await res.text().catch(() => "");
-    const persian = geminiErrorToPersian(res.status, t);
-    pushGeminiLog({ level: "error", phase: "call", msg: persian, detail: `model=${model} status=${res.status} ${ms}ms | ${clipBody(t)}` });
-    return { status: res.status, ok: false, text: persian };
-  } catch (e) {
-    // خطای شبکه یا تایم‌اوت — بیرون دوباره امتحان/گزارش می‌شود
-    pushGeminiLog({ level: "warn", phase: "call", msg: `مدل «${model}» پاسخ نداد (خطای شبکه یا تایم‌اوت)`, detail: `${Date.now() - t0}ms ${abortReason(e, ac)}` });
-    return null;
-  } finally {
-    clearTimeout(timer);
   }
+  return null;
 }
 
 /** تلاش مجدد خودکار روی خطای شبکه (بدون پاسخ HTTP) — v2.14.3 */
@@ -472,33 +577,45 @@ async function tryWithKey(
   const keyError = r.status === 401 || r.status === 403 || r.status === 429 || (r.status === 400 && r.text.includes("کلید"));
   if (keyError) return { ok: false, text: r.text, keyError: true };
 
-  // ۲) فقط 404 یعنی «مدل نیست» → بقیهٔ خطاها مستقیم گزارش می‌شوند
-  if (r.status !== 404) return { ok: false, text: r.text };
-  writeCachedModel(null);
+  // ۲) 404 یعنی «مدل بازنشسته شده» و 503 یعنی «مدل شلوغ است» — هر دو → مدل دیگری امتحان می‌شود (v2.15.2)
+  const modelGone = r.status === 404;
+  const modelBusy = r.status === 503;
+  if (!modelGone && !modelBusy) return { ok: false, text: r.text };
+  if (modelGone) writeCachedModel(null);
 
-  // ۳) فهرست واقعی مدل‌های مجاز این کلید
-  const listed = await listGeminiModels(apiKey);
-  if (listed.ok) {
-    const pick = pickGeminiModel(listed.models);
-    if (pick && pick !== first) {
-      const r2 = await doCallOnce(pick, buildGeminiBody(pick, opts.systemPrompt, opts.history), apiKey);
-      if (r2?.ok) {
-        writeCachedModel(pick);
-        return { ok: true, text: r2.text };
-      }
-      if (r2 && r2.status !== 404) return { ok: false, text: r2.text };
-    }
+  // ۳) پیشنهاد خودکار گوگل در متن خطا — «use models/gemini-3.8-flash» → اول همان امتحان می‌شود (v2.15.2)
+  const suggestion = modelGone ? suggestedModelFromError(r.rawBody || "") : null;
+  if (suggestion) {
+    pushGeminiLog({ level: "info", phase: "call", msg: `گوگل مدل جایگزین پیشنهاد داد: «${suggestion}» — اول همان امتحان می‌شود`, detail: "suggestion from 404 body" });
   }
 
-  // ۴) لیست ثابت — هر مدلی که 404 نداد (بدون تکرار شبکه تا طولانی نشود)
-  for (const m of GEMINI_MODELS) {
-    if (m === first) continue;
-    const r3 = await doCallOnce(m, buildGeminiBody(m, opts.systemPrompt, opts.history), apiKey);
-    if (r3?.ok) {
-      writeCachedModel(m);
-      return { ok: true, text: r3.text };
+  // ۴) ترتیب هوشمند: پیشنهاد گوگل → مدل‌های فهرست واقعی کلید (نسخهٔ جدید اول) → لیست ثابت
+  const listed = await listGeminiModels(apiKey);
+  const candidates: string[] = [];
+  if (suggestion) candidates.push(suggestion);
+  if (listed.ok) {
+    for (const c of orderModelCandidates(listed.models)) {
+      if (c !== first && !candidates.includes(c)) candidates.push(c);
     }
-    if (r3 && r3.status !== 404) return { ok: false, text: r3.text };
+  }
+  for (const pref of GEMINI_MODELS) {
+    if (pref !== first && !candidates.includes(pref)) candidates.push(pref);
+  }
+
+  // ۵) امتحان ترتیبی — 404/503 مدل → بعدی؛ 401/403/429 → کلید بعدی؛ بقیه → گزارش
+  for (const m of candidates.slice(0, 6)) {
+    const r2 = await doCallOnce(m, buildGeminiBody(m, opts.systemPrompt, opts.history), apiKey);
+    if (r2?.ok) {
+      writeCachedModel(m);
+      return { ok: true, text: r2.text };
+    }
+    if (r2 === null) {
+      return { ok: false, text: usingProxy() ? PROXY_NET_FAIL_MSG : GEMINI_NET_FAIL_MSG, network: true };
+    }
+    if (r2.status === 401 || r2.status === 403 || r2.status === 429) {
+      return { ok: false, text: r2.text, keyError: true };
+    }
+    // 404/503 و بقیهٔ خطاهای مدل → کاندید بعدی
   }
   return { ok: false, text: "هیچ مدل Gemini با این کلید پاسخ نداد — از دکمهٔ «تست اتصال» در تنظیمات وضعیت کلید و مدل‌های فعال را ببینید." };
 }

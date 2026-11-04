@@ -1,7 +1,7 @@
 // تست انتخاب مدل Gemini (v2.14.2) — اجرا: bun scripts/test-gemini-models.ts
 // فقط توابع خالص: parseModelsList، pickGeminiModel، geminiErrorToPersian
 
-import { parseModelsList, pickGeminiModel, geminiErrorToPersian } from "../src/lib/ai/gemini";
+import { parseModelsList, pickGeminiModel, orderModelCandidates, suggestedModelFromError, geminiErrorToPersian } from "../src/lib/ai/gemini";
 
 let pass = 0;
 let failCount = 0;
@@ -39,13 +39,20 @@ check("ورودی null → خالی", parseModelsList(null), []);
 
 // ─── pickGeminiModel ───
 
-// ترجیح اولویت ثابت
+// ترجیح اولویت ثابت — نسل جدید مقدم است (v2.15.2: گوگل ۲.۰/۲.۵ را برای کلیدهای جدید بازنشسته کرده)
 const pick1 = pickGeminiModel([
   { name: "gemini-1.5-flash", supportsGenerate: true },
   { name: "gemini-2.0-flash", supportsGenerate: true },
   { name: "gemini-2.5-flash", supportsGenerate: true },
 ]);
-check("اولویت: gemini-2.0-flash اول است", pick1, "gemini-2.0-flash");
+check("اولویت نسل جدید: gemini-2.5-flash مقدم بر 2.0", pick1, "gemini-2.5-flash");
+
+// نسل فعلی اگر در فهرست باشد اول است
+const pick38 = pickGeminiModel([
+  { name: "gemini-2.5-flash", supportsGenerate: true },
+  { name: "gemini-3.8-flash", supportsGenerate: true },
+]);
+check("نسل فعلی: gemini-3.8-flash اول", pick38, "gemini-3.8-flash");
 
 // مدل‌های ترجیحی نیستند → هر flash
 const pick2 = pickGeminiModel([
@@ -71,6 +78,40 @@ const pick4 = pickGeminiModel([
   { name: "gemini-2.5-flash", supportsGenerate: true },
 ]);
 check("ترجیحیِ غیر generate رد می‌شود", pick4, "gemini-2.5-flash");
+
+// ─── orderModelCandidates (v2.15.2) ───
+
+// ترتیب کامل: ترجیحی‌ها سر فهرست، بقیه نسخهٔ جدید اول، غیرگفتگویی‌ها حذف
+const ordered = orderModelCandidates([
+  { name: "text-embedding-004", supportsGenerate: true }, // غیرگفتگویی → حذف
+  { name: "imagen-4.0-generate-001", supportsGenerate: true }, // حذف
+  { name: "gemini-2.5-flash-preview-tts", supportsGenerate: true }, // حذف (tts)
+  { name: "gemini-2.0-flash", supportsGenerate: true },
+  { name: "gemini-3.8-flash-lite", supportsGenerate: true },
+  { name: "gemini-3.8-flash", supportsGenerate: true },
+  { name: "gemini-2.5-pro", supportsGenerate: true },
+  { name: "gemini-4.1-flash-preview", supportsGenerate: true },
+]);
+check("ترتیب: ترجیحی‌ها سر فهرست", ordered.slice(0, 3), ["gemini-3.8-flash", "gemini-3.8-flash-lite", "gemini-2.0-flash"]);
+check("ترتیب: بقیه نسخهٔ جدید اول", ordered.slice(3), ["gemini-4.1-flash-preview", "gemini-2.5-pro"]);
+
+// تکرار و مدل بی‌گفتگو خالص
+const dedup = orderModelCandidates([
+  { name: "gemini-3.8-flash", supportsGenerate: true },
+  { name: "gemini-3.8-flash", supportsGenerate: true },
+  { name: "aqa", supportsGenerate: true },
+]);
+check("ترتیب: تکرار حذف + غیرگفتگویی حذف", dedup, ["gemini-3.8-flash"]);
+
+check("ترتیب: فهرست خالی → خالی", orderModelCandidates([]), []);
+
+// ─── suggestedModelFromError (v2.15.2) ───
+
+const real404Body =
+  '{ "error": { "code": 404, "message": "This model models/gemini-2.0-flash is no longer available. Please update your code to use models/gemini-3.8-flash for the latest features and improvements. We recommend that you use gemini-3.8-flash." } }';
+check("پیشنهاد گوگل از متن 404 واقعی", suggestedModelFromError(real404Body), "gemini-3.8-flash");
+check("پیشنهاد: متن بی‌پیشنهاد", suggestedModelFromError("quota exceeded"), null);
+check("پیشنهاد: متن خالی", suggestedModelFromError(""), null);
 
 // ─── geminiErrorToPersian ───
 
