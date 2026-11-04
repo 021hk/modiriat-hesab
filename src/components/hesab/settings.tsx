@@ -22,7 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Sun, Moon, Monitor, Coins, Info, SunMoon, RefreshCw, Download, CheckCircle2, AlertTriangle, ExternalLink, Wand2, Plus, Pencil, Trash2, Sparkles, BellRing, Volume2, ShieldCheck, Loader2 } from "lucide-react";
+import { Sun, Moon, MoonStar, Monitor, Coins, Info, SunMoon, RefreshCw, Download, CheckCircle2, AlertTriangle, ExternalLink, Wand2, Plus, Pencil, Trash2, Sparkles, BellRing, Volume2, ShieldCheck, Loader2 } from "lucide-react";
 import { Backup } from "@/components/hesab/backup";
 import {
   currencyLabel,
@@ -46,15 +46,22 @@ import {
 } from "@/lib/app-update";
 import { openExternalUrl } from "@/lib/native-sms";
 import { testGeminiConnection, cachedGeminiModel, resetGeminiModelCache } from "@/lib/ai/gemini";
+import { ACCENTS, SPECIALS, applyAccent, applySpecial, readStoredAccent, readStoredSpecial, type AccentId, type SpecialId } from "@/lib/theme";
 import { checkNotifPermission, requestNotifPermission, syncInstallmentNotifications, fireTestNotification, notifSupported } from "@/lib/notifications";
 import type { AppSettings, NotifSettings } from "@/lib/client-api";
 
-const APP_VERSION = "۲.۱۴.۲";
+const APP_VERSION = "۲.۱۴.۳";
 
 function ThemeSection() {
   const { theme, setTheme } = useTheme();
   const [mounted, setMounted] = useState(false);
-  useEffect(() => setMounted(true), []);
+  const [accent, setAccent] = useState<AccentId>("sabz");
+  const [special, setSpecial] = useState<SpecialId>("none");
+  useEffect(() => {
+    setMounted(true);
+    setAccent(readStoredAccent() ?? "sabz");
+    setSpecial(readStoredSpecial() ?? "none");
+  }, []);
 
   const options: { value: string; label: string; icon: typeof Sun }[] = [
     { value: "light", label: "روشن", icon: Sun },
@@ -62,38 +69,114 @@ function ThemeSection() {
     { value: "system", label: "سیستمی", icon: Monitor },
   ];
 
+  const pickAccent = (id: AccentId) => {
+    setAccent(id);
+    applyAccent(id);
+  };
+  const pickSpecial = (id: SpecialId) => {
+    setSpecial(id);
+    applySpecial(id, (v) => setTheme(v));
+  };
+
   return (
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2 text-base">
           <SunMoon className="h-5 w-5 text-emerald-700 dark:text-emerald-400" />
-          حالت روز و شب
+          تم و رنگ‌بندی
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-3">
-        <p className="text-sm leading-6 text-muted-foreground">
-          ظاهر برنامه را انتخاب کنید. در حالت «سیستمی» برنامه با تنظیم شب/روز خود گوشی هماهنگ می‌شود.
-        </p>
-        <div className="grid grid-cols-3 gap-2">
-          {options.map((o) => {
-            const active = mounted && theme === o.value;
-            return (
-              <button
-                key={o.value}
-                type="button"
-                onClick={() => setTheme(o.value)}
-                className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 text-sm font-medium transition ${
-                  active
-                    ? "border-emerald-600 bg-emerald-50 text-emerald-800 dark:border-emerald-500 dark:bg-emerald-950/50 dark:text-emerald-300"
-                    : "border-border text-muted-foreground hover:border-emerald-300 dark:hover:border-emerald-800"
-                }`}
-              >
-                <o.icon className="h-5 w-5" />
-                {o.label}
-                {active && <span className="text-[10px] text-emerald-600 dark:text-emerald-400">فعال</span>}
-              </button>
-            );
-          })}
+      <CardContent className="space-y-4">
+        {/* حالت روز و شب */}
+        <div>
+          <p className="mb-2 text-sm font-medium">حالت روز و شب</p>
+          <div className="grid grid-cols-3 gap-2">
+            {options.map((o) => {
+              const active = mounted && theme === o.value;
+              return (
+                <button
+                  key={o.value}
+                  type="button"
+                  onClick={() => setTheme(o.value)}
+                  className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 text-sm font-medium transition ${
+                    active
+                      ? "border-emerald-600 bg-emerald-50 text-emerald-800 dark:border-emerald-500 dark:bg-emerald-950/50 dark:text-emerald-300"
+                      : "border-border text-muted-foreground hover:border-emerald-300 dark:hover:border-emerald-800"
+                  }`}
+                >
+                  <o.icon className="h-5 w-5" />
+                  {o.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* رنگ اصلی برنامه */}
+        <div>
+          <p className="mb-2 text-sm font-medium">رنگ اصلی برنامه</p>
+          <div className="grid grid-cols-5 gap-2">
+            {ACCENTS.map((a) => {
+              const active = mounted && accent === a.id;
+              return (
+                <button
+                  key={a.id}
+                  type="button"
+                  title={a.hint}
+                  onClick={() => pickAccent(a.id)}
+                  className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-2 text-[11px] font-medium transition ${
+                    active
+                      ? "border-emerald-600 text-emerald-800 dark:border-emerald-500 dark:text-emerald-300"
+                      : "border-border text-muted-foreground hover:border-emerald-300 dark:hover:border-emerald-800"
+                  }`}
+                >
+                  <span
+                    className={`flex h-8 w-8 items-center justify-center rounded-full shadow-inner ${
+                      active ? "ring-2 ring-emerald-600 ring-offset-2 ring-offset-background dark:ring-emerald-400" : ""
+                    }`}
+                    style={{ backgroundColor: a.swatch }}
+                  >
+                    {active && <CheckCircle2 className="h-4 w-4 text-white drop-shadow" />}
+                  </span>
+                  {a.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* تم‌های ویژه */}
+        <div>
+          <p className="mb-2 text-sm font-medium">تم ویژه</p>
+          <div className="grid grid-cols-3 gap-2">
+            {SPECIALS.map((s) => {
+              const active = mounted && special === s.id;
+              const Icon = s.id === "meshki" ? MoonStar : s.id === "kahkeshani" ? Sparkles : RefreshCw;
+              return (
+                <button
+                  key={s.id}
+                  type="button"
+                  title={s.hint}
+                  onClick={() => pickSpecial(s.id)}
+                  className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 text-[11px] font-medium transition ${
+                    active
+                      ? "border-emerald-600 bg-emerald-50 text-emerald-800 dark:border-emerald-500 dark:bg-emerald-950/50 dark:text-emerald-300"
+                      : "border-border text-muted-foreground hover:border-emerald-300 dark:hover:border-emerald-800"
+                  }`}
+                >
+                  <Icon className="h-5 w-5" />
+                  {s.label}
+                </button>
+              );
+            })}
+          </div>
+          {mounted && special !== "none" && (
+            <p className="mt-2 text-xs leading-5 text-muted-foreground">
+              {special === "kahkeshani"
+                ? "✨ تم کهکشانی فعال شد — پس‌زمینهٔ ستاره‌باران با ستاره‌های چشمک‌زن به رنگ تم؛ صفحه هم تیره می‌شود."
+                : "⬛ تم مشکی کامل فعال شد — پس‌زمینهٔ کاملاً سیاه (مناسب نمایشگر OLED)؛ صفحه هم تیره می‌شود."}
+            </p>
+          )}
         </div>
       </CardContent>
     </Card>

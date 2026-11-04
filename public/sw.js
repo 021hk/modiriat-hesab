@@ -1,5 +1,5 @@
 // Service Worker برای حساب‌یار - پشتیبانی آفلاین
-const CACHE_NAME = "hesab-yar-v21";
+const CACHE_NAME = "hesab-yar-v22";
 const ASSETS = [
   "/fonts/Vazirmatn-Regular.woff2",
   "/fonts/Vazirmatn-Medium.woff2",

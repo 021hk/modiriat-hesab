@@ -19,7 +19,7 @@ walk(OUT);
 const ASSETS = files.filter((f) => !f.endsWith("/sw.js") && !f.endsWith(".map"));
 
 const sw = `// Service Worker حساب‌یار v4 — پشتیبانی آفلاین کامل
-const CACHE_NAME = "hesab-yar-v21";
+const CACHE_NAME = "hesab-yar-v22";
 const ASSETS = ${JSON.stringify(ASSETS, null, 2)};
 
 self.addEventListener("install", (event) => {

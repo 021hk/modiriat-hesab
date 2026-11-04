@@ -9,7 +9,7 @@ import { pushBackHandler } from "@/lib/back-nav";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Sparkles, X, Mic, MicOff, Send, Volume2, VolumeX, Eraser, Settings2, Loader2 } from "lucide-react";
+import { Sparkles, X, Mic, MicOff, Send, Volume2, VolumeX, Eraser, Settings2, Loader2, Maximize2, Minimize2, ArrowDown } from "lucide-react";
 import { api, type AppSettings, type Stats, type Category, type BankAccount, type Installment, type AutoCatRule } from "@/lib/client-api";
 import { callGemini, buildSystemPrompt, buildDataContext, parseAiResponse } from "@/lib/ai/gemini";
 import { validateAiActions, executeAiAction } from "@/lib/ai/actions";
@@ -22,6 +22,25 @@ interface ChatMsg {
 }
 
 const ORB_POS_KEY = "aiOrbPos";
+const CHAT_SIZE_KEY = "aiChatSize"; // اندازهٔ ذخیره‌شدهٔ پنجرهٔ چت (v2.14.3)
+const ORB_SIZE = 56;
+
+interface ChatSize {
+  w: number;
+  h: number;
+}
+
+function loadChatSize(): ChatSize | null {
+  try {
+    const raw = localStorage.getItem(CHAT_SIZE_KEY);
+    if (!raw) return null;
+    const s = JSON.parse(raw) as ChatSize;
+    if (typeof s.w === "number" && typeof s.h === "number" && s.w >= 260 && s.h >= 280) return s;
+  } catch {
+    // ignore
+  }
+  return null;
+}
 
 // ─── صدا: تشخیص گفتار (ورود صوتی) ───
 
@@ -170,7 +189,14 @@ export function AiOrb({ onOpenSettings }: { onOpenSettings: () => void }) {
   const [speakOn, setSpeakOn] = useState(false);
   const stopListenRef = useRef<StopFn | null>(null);
   const scrollRef = useRef<HTMLDivElement | null>(null);
+  const orbRef = useRef<HTMLButtonElement | null>(null);
+  const panelRef = useRef<HTMLDivElement | null>(null);
   const dragState = useRef<{ startX: number; startY: number; moved: boolean; left: number; top: number } | null>(null);
+  const resizeState = useRef<{ startX: number; startY: number; w: number; h: number; last?: ChatSize } | null>(null);
+  const [chatSize, setChatSize] = useState<ChatSize | null>(null);
+  const [maximized, setMaximized] = useState(false);
+  const [atBottom, setAtBottom] = useState(true);
+  const [, setVvTick] = useState(0); // بازمحاسبهٔ موقعیت با باز/بسته‌شدن کیبورد
 
   const { data: settings } = useQuery<AppSettings>({
     queryKey: ["app-settings"],
@@ -212,6 +238,8 @@ export function AiOrb({ onOpenSettings }: { onOpenSettings: () => void }) {
         const p = JSON.parse(raw) as { left: number; top: number };
         if (typeof p.left === "number" && typeof p.top === "number") setPos(p);
       }
+      const s = loadChatSize();
+      if (s) setChatSize(s);
     } catch {
       // ignore
     }
@@ -231,9 +259,43 @@ export function AiOrb({ onOpenSettings }: { onOpenSettings: () => void }) {
     });
   }, [open]);
 
+  // وقتی پنل باز است با تغییر اندازهٔ دید (باز/بسته‌شدن کیبورد) موقعیت بازمحاسبه شود
   useEffect(() => {
-    if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
-  }, [msgs, busy]);
+    if (!open) return;
+    const bump = () => setVvTick((t) => t + 1);
+    window.visualViewport?.addEventListener("resize", bump);
+    window.visualViewport?.addEventListener("scroll", bump);
+    window.addEventListener("resize", bump);
+    return () => {
+      window.visualViewport?.removeEventListener("resize", bump);
+      window.visualViewport?.removeEventListener("scroll", bump);
+      window.removeEventListener("resize", bump);
+    };
+  }, [open]);
+
+  // موقعیت لحظه‌ای گوی — موقعی که پنل باز است، گوی همیشه بالای کیبورد دیده می‌شود
+  // و پنل چسبیده به آن می‌ماند (v2.14.3)
+  const getEffPos = () => {
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const base = pos ?? { left: W - ORB_SIZE - 16, top: H - ORB_SIZE - 96 };
+    const vv = window.visualViewport;
+    const vvBottom = vv ? vv.offsetTop + vv.height : H;
+    const maxTop = Math.max(8, Math.min(H - ORB_SIZE - 4, vvBottom - ORB_SIZE - 8));
+    return {
+      left: Math.min(Math.max(4, base.left), W - ORB_SIZE - 4),
+      top: Math.min(Math.max(8, base.top), maxTop),
+    };
+  };
+
+  useEffect(() => {
+    if (scrollRef.current && atBottom) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+  }, [msgs, busy, atBottom, open]);
+
+  const onMsgsScroll = (e: React.UIEvent<HTMLDivElement>) => {
+    const el = e.currentTarget;
+    setAtBottom(el.scrollHeight - el.scrollTop - el.clientHeight < 120);
+  };
 
   // ─── درگ گوی (جابه‌جایی با انگشت) ───
   const onPointerDown = (e: React.PointerEvent<HTMLButtonElement>) => {
@@ -275,6 +337,52 @@ export function AiOrb({ onOpenSettings }: { onOpenSettings: () => void }) {
     } catch {
       // ignore
     }
+  };
+
+  // ─── تغییر اندازهٔ پنجرهٔ چت (v2.14.3) — دستگیرهٔ گوشهٔ پایین ───
+  const onGripDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    const rect = panelRef.current?.getBoundingClientRect();
+    if (!rect) return;
+    resizeState.current = { startX: e.clientX, startY: e.clientY, w: rect.width, h: rect.height };
+    e.currentTarget.setPointerCapture(e.pointerId);
+  };
+  const onGripMove = (e: React.PointerEvent<HTMLDivElement>) => {
+    const s = resizeState.current;
+    if (!s) return;
+    // دستگیره گوشهٔ پایین-چپ است: کشیدن به چپ ← پهن‌تر، کشیدن به بالا ← بلندتر
+    const dx = e.clientX - s.startX;
+    const dy = e.clientY - s.startY;
+    const maxW = Math.min(window.innerWidth - 16, 640);
+    const maxH = Math.min(window.innerHeight - 90, 820);
+    const w = Math.round(Math.min(Math.max(280, s.w - dx), maxW));
+    const h = Math.round(Math.min(Math.max(300, s.h - dy), maxH));
+    s.last = { w, h };
+    setChatSize({ w, h });
+    setMaximized(false);
+  };
+  const onGripUp = (e: React.PointerEvent<HTMLDivElement>) => {
+    const s = resizeState.current;
+    resizeState.current = null;
+    try {
+      e.currentTarget.releasePointerCapture(e.pointerId);
+    } catch {
+      // ignore
+    }
+    if (!s?.last) return;
+    const final = s.last;
+    setChatSize(final);
+    try {
+      localStorage.setItem(CHAT_SIZE_KEY, JSON.stringify(final));
+    } catch {
+      // ignore
+    }
+  };
+
+  const toggleMaximize = () => {
+    setMaximized((m) => !m);
+    setAtBottom(true);
   };
 
   // ─── ارسال پیام به Gemini ───
@@ -405,18 +513,48 @@ export function AiOrb({ onOpenSettings }: { onOpenSettings: () => void }) {
     }
   };
 
-  const orbStyle = pos ? { left: pos.left, top: pos.top } : undefined;
-  const orbCls = pos ? "" : "right-4 bottom-24 lg:bottom-8 lg:left-8";
+  // موقعیت گوی: وقتی پنل باز است همیشه موقعیت محاسبه‌شده (بالای کیبورد)؛
+  // وقتی بسته است موقعیت ذخیره‌شده یا پیش‌فرض (v2.14.3)
+  const orbStyleSaved: React.CSSProperties | undefined = pos ? { left: pos.left, top: pos.top } : undefined;
+  const orbStyle: React.CSSProperties = open
+    ? (() => {
+        const p = getEffPos();
+        return { left: p.left, top: p.top };
+      })()
+    : orbStyleSaved;
+  const orbCls = open || pos ? "" : "right-4 bottom-24 lg:bottom-8 lg:left-8";
 
   const hasKey = Boolean(settings?.geminiApiKey);
 
   // دستیار از تنظیمات خاموش شده؟ (v2.14.2) — گوی و پنل نشان داده نمی‌شود
   if (settings?.ai && settings.ai.aiEnabled === false) return null;
 
+  // ─── هندسهٔ پنل چت — چسبیده به گوی (v2.14.3) ───
+  const panelGeometry = (() => {
+    if (!open) return null;
+    const W = window.innerWidth;
+    const H = window.innerHeight;
+    const orb = getEffPos();
+    const maxW = Math.min(W - 16, 640);
+    const maxH = Math.min(H - 90, 820);
+    const width = maximized ? maxW : Math.min(chatSize?.w ?? 380, maxW);
+    const height = maximized ? Math.min(maxH, Math.round(H * 0.82)) : chatSize?.h ? Math.min(chatSize.h, maxH) : null;
+    const bottom = Math.max(6, H - orb.top + 6); // لبهٔ پایین پنل دقیقاً ۶px بالای گوی
+    return {
+      left: Math.min(Math.max(8, orb.left + ORB_SIZE / 2 - width / 2), W - width - 8),
+      bottom,
+      width,
+      // سقف ارتفاع: از لبهٔ پایین پنل تا ۵۲px بالای صفحه (هدر دیده شود)
+      maxHeight: Math.max(240, orb.top - 6 - 52),
+      height,
+    };
+  })();
+
   return (
     <>
       {/* گوی شناور */}
       <button
+        ref={orbRef}
         type="button"
         aria-label="دستیار هوشمند"
         onPointerDown={onPointerDown}
@@ -425,15 +563,16 @@ export function AiOrb({ onOpenSettings }: { onOpenSettings: () => void }) {
         className={`fixed z-40 flex h-14 w-14 touch-none select-none items-center justify-center rounded-full outline-none ${orbCls}`}
         style={{
           ...orbStyle,
-          background: "radial-gradient(circle at 30% 25%, #a7f3d0 0%, #34d399 32%, #059669 62%, #064e3b 100%)",
-          boxShadow: "0 8px 20px rgba(5,150,105,0.45), inset 0 -5px 10px rgba(0,0,0,0.28), inset 0 4px 8px rgba(255,255,255,0.4)",
+          background: "radial-gradient(circle at 30% 25%, var(--orb-hi, #a7f3d0) 0%, var(--orb-mid, #34d399) 32%, var(--orb-deep, #059669) 62%, var(--orb-dark, #064e3b) 100%)",
+          boxShadow: "0 8px 20px var(--orb-glow, rgba(5,150,105,0.45)), inset 0 -5px 10px rgba(0,0,0,0.28), inset 0 4px 8px rgba(255,255,255,0.4)",
         }}
       >
         {/* حلقهٔ درخشش — حالت گفتگو/گوش‌دادن */}
         <span
-          className={`pointer-events-none absolute inset-0 rounded-full border-2 border-emerald-300/70 ${
+          className={`pointer-events-none absolute inset-0 rounded-full border-2 ${
             listening ? "animate-ping" : open ? "animate-pulse" : "hidden"
           }`}
+          style={{ borderColor: "var(--orb-hi, #a7f3d0)" }}
         />
         <Sparkles className="relative h-6 w-6 text-white drop-shadow-[0_1px_2px_rgba(0,0,0,0.4)]" />
         {/* نشان اقساط نزدیک — خودش خبر می‌دهد */}
@@ -444,16 +583,19 @@ export function AiOrb({ onOpenSettings }: { onOpenSettings: () => void }) {
         )}
       </button>
 
-      {/* پنجرهٔ گفتگو */}
-      {open && (
+      {/* پنجرهٔ گفتگو — همیشه چسبیده به گوی */}
+      {open && panelGeometry && (
         <div
+          ref={panelRef}
           dir="rtl"
           className="fixed z-50 flex flex-col overflow-hidden rounded-2xl border bg-card shadow-2xl"
-          style={
-            pos
-              ? { left: Math.min(pos.left, Math.max(12, window.innerWidth - 392)), top: Math.min(pos.top - 12, window.innerHeight - 200), transform: "translateY(-100%)", width: "min(92vw, 380px)", maxHeight: "70vh" }
-              : { left: 12, right: 12, bottom: "calc(env(safe-area-inset-bottom) + 150px)", maxHeight: "68vh" }
-          }
+          style={{
+            left: panelGeometry.left,
+            bottom: panelGeometry.bottom,
+            width: panelGeometry.width,
+            maxHeight: panelGeometry.maxHeight,
+            height: panelGeometry.height,
+          }}
         >
           {/* هدر */}
           <div className="flex items-center justify-between border-b bg-emerald-700 px-3 py-2 text-white">
@@ -463,6 +605,15 @@ export function AiOrb({ onOpenSettings }: { onOpenSettings: () => void }) {
               {listening && <span className="flex items-center gap-1 text-[10px] text-emerald-200"><Mic className="h-3 w-3 animate-pulse" /> دارم گوش می‌دهم…</span>}
             </div>
             <div className="flex items-center gap-0.5">
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8 text-white hover:bg-emerald-600"
+                onClick={toggleMaximize}
+                aria-label={maximized ? "کوچک کردن پنجره" : "بزرگ کردن پنجره"}
+              >
+                {maximized ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
+              </Button>
               <Button variant="ghost" size="icon" className="h-8 w-8 text-white hover:bg-emerald-600" onClick={toggleSpeak} aria-label="خواندن پاسخ با صدا">
                 {speakOn ? <Volume2 className="h-4 w-4" /> : <VolumeX className="h-4 w-4" />}
               </Button>
@@ -482,7 +633,7 @@ export function AiOrb({ onOpenSettings }: { onOpenSettings: () => void }) {
           </div>
 
           {/* پیام‌ها */}
-          <div ref={scrollRef} className="flex-1 space-y-2.5 overflow-y-auto p-3">
+          <div ref={scrollRef} onScroll={onMsgsScroll} className="relative flex-1 space-y-2.5 overflow-y-auto p-3">
             {!hasKey && (
               <div className="rounded-xl border border-amber-300 bg-amber-50 p-3 text-xs leading-5 text-amber-800 dark:border-amber-800 dark:bg-amber-950/40 dark:text-amber-300">
                 کلید Gemini تنظیم نشده است.
@@ -510,6 +661,21 @@ export function AiOrb({ onOpenSettings }: { onOpenSettings: () => void }) {
             )}
           </div>
 
+          {/* دکمهٔ پرش به پایین — وقتی کاربر بالا خوانده */}
+          {!atBottom && (
+            <button
+              type="button"
+              onClick={() => {
+                setAtBottom(true);
+                if (scrollRef.current) scrollRef.current.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
+              }}
+              aria-label="رفتن به آخرین پیام"
+              className="absolute bottom-20 left-1/2 z-10 flex h-8 w-8 -translate-x-1/2 items-center justify-center rounded-full border bg-card text-muted-foreground shadow-md transition hover:text-foreground"
+            >
+              <ArrowDown className="h-4 w-4" />
+            </button>
+          )}
+
           {/* پیشنهادهای سریع — فقط اول گفتگو */}
           {msgs.length <= 1 && !busy && (
             <div className="flex flex-wrap gap-1.5 px-3 pb-2">
@@ -527,7 +693,25 @@ export function AiOrb({ onOpenSettings }: { onOpenSettings: () => void }) {
           )}
 
           {/* ورودی */}
-          <div className="flex items-center gap-1.5 border-t p-2">
+          <div className="relative flex items-center gap-1.5 border-t p-2">
+            {/* دستگیرهٔ تغییر اندازه — گوشهٔ پایین-چپ (v2.14.3) */}
+            <div
+              onPointerDown={onGripDown}
+              onPointerMove={onGripMove}
+              onPointerUp={onGripUp}
+              aria-label="تغییر اندازهٔ پنجره"
+              title="برای کوچک/بزرگ کردن بکشید"
+              className="absolute -left-0.5 -top-5 z-10 flex h-8 w-8 cursor-nwse-resize touch-none items-center justify-center rounded-full text-muted-foreground/60"
+            >
+              <svg viewBox="0 0 24 24" className="h-4 w-4 rotate-90" fill="currentColor">
+                <circle cx="6" cy="18" r="1.6" />
+                <circle cx="12" cy="18" r="1.6" />
+                <circle cx="18" cy="18" r="1.6" />
+                <circle cx="12" cy="12" r="1.6" />
+                <circle cx="18" cy="12" r="1.6" />
+                <circle cx="18" cy="6" r="1.6" />
+              </svg>
+            </div>
             <Button
               variant="outline"
               size="icon"

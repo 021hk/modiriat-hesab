@@ -3,6 +3,7 @@ import "./globals.css";
 import { Toaster } from "@/components/ui/toaster";
 import { SwRegister } from "@/components/sw-register";
 import { ThemeProvider } from "@/components/theme-provider";
+import { THEME_BOOT_SCRIPT } from "@/lib/theme";
 
 // نسخه ۲.۰: برنامه کاملاً آفلاین است — داده‌ها در IndexedDB خود دستگاه ذخیره می‌شوند
 
@@ -46,15 +47,23 @@ export default function RootLayout({
             __html: `try{if('serviceWorker' in navigator){navigator.serviceWorker.register('/sw.js').catch(function(){})}}catch(e){}`,
           }}
         />
+        {/* تم رنگی — قبل از رندر اعمال می‌شود تا صفحه رنگ درست را از اول نشان دهد (v2.14.3) */}
+        <script dangerouslySetInnerHTML={{ __html: THEME_BOOT_SCRIPT }} />
         <style
           dangerouslySetInnerHTML={{
             __html: `
               html { background-color: #f4f8f6; color-scheme: light; }
               html.dark { background-color: #0b1410; color-scheme: dark; }
+              html[data-special='meshki'] { background-color: #000000; color-scheme: dark; }
+              html[data-special='kahkeshani'] { background-color: #050817; color-scheme: dark; }
               html.dark #boot-splash { background-color: #0b1410 !important; }
+              html[data-special='meshki'] #boot-splash { background-color: #000000 !important; }
+              html[data-special='kahkeshani'] #boot-splash { background-color: #050817 !important; }
               html.dark #boot-splash .boot-text { color: #37b78a !important; }
               body { background-color: #f4f8f6; color: #0e1913; margin: 0; }
               html.dark body { background-color: #0b1410; color: #ecefed; }
+              html[data-special='meshki'] body { background-color: #000000; color: #f4f4f5; }
+              html[data-special='kahkeshani'] body { background-color: #050817; color: #e7eaf6; }
               @font-face {
                 font-family: 'Vazirmatn';
                 src: url('/fonts/Vazirmatn-Light.woff2') format('woff2');

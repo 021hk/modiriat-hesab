@@ -1003,8 +1003,12 @@ async function createInstallmentPlan(body: Record<string, unknown>): Promise<Rec
   };
 }
 
-/** حذف کل طرح — فقط اقساط پرداخت‌نشده حذف می‌شوند (پرداخت‌شده‌ها بایگانی می‌مانند) */
-async function deletePlanInstallments(planId: string): Promise<{ deleted: number; keptPaid: number }> {
+/**
+ * حذف طرح قسط‌بندی (v2.14.3):
+ * حالت عادی — فقط اقساط پرداخت‌نشده حذف می‌شوند (پرداخت‌شده‌ها بایگانی می‌مانند)؛
+ * با includePaid — حذف کامل همهٔ اقساط طرح حتی پرداخت‌شده‌ها.
+ */
+async function deletePlanInstallments(planId: string, includePaid = false): Promise<{ deleted: number; keptPaid: number }> {
   if (!planId) fail("شناسهٔ طرح نامعتبر است");
   const all = await dbGetAll<Installment>(STORES.installments);
   const rows = all.filter((r) => r.planId === planId);
@@ -1012,7 +1016,7 @@ async function deletePlanInstallments(planId: string): Promise<{ deleted: number
   let deleted = 0;
   let keptPaid = 0;
   for (const r of rows) {
-    if (r.paid) {
+    if (r.paid && !includePaid) {
       keptPaid++;
       continue;
     }
@@ -1401,7 +1405,8 @@ export async function localRequest<T>(method: string, url: string, body?: unknow
 
     if (resource === "backup" && m === "POST") handler = table.backup.POST;
     else if (resource === "installments" && id === "plan" && !sub && m === "POST") handler = (q, b) => createInstallmentPlan(b);
-    else if (resource === "installments" && id === "plan" && sub && m === "DELETE") handler = async () => deletePlanInstallments(sub);
+    else if (resource === "installments" && id === "plan" && sub && m === "DELETE")
+      handler = (q) => deletePlanInstallments(sub, q.get("all") === "1"); // ?all=1 → حذف کامل حتی پرداخت‌شده‌ها
     else if (id && sub === "attachments" && resource === "debts" && m === "POST") {
       handler = (q, b) => createAttachment(id, b);
     } else if (id && sub === "link-debt" && resource === "transactions" && m === "POST") {

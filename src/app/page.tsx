@@ -15,6 +15,7 @@ import { Categories } from "@/components/hesab/categories";
 import { Settings } from "@/components/hesab/settings";
 import { TxDialog } from "@/components/hesab/transactions";
 import { AiOrb } from "@/components/hesab/ai-orb";
+import { GalaxyStars } from "@/components/hesab/galaxy-stars";
 import { api, type Category, type BankAccount } from "@/lib/client-api";
 import { SmsBackgroundSync } from "@/components/hesab/sms-background-sync";
 import { syncInstallmentNotifications } from "@/lib/notifications";
@@ -87,6 +88,7 @@ function AppContent() {
 
   return (
     <div className="flex min-h-screen flex-col">
+      <GalaxyStars />
       <SmsBackgroundSync />
       {/* هدر — با padding-top امن (env safe-area) تا روی گوشی‌های دارای نوتش/دوربین بالای صفحه،
           محتوای هدر زیر دوربین نرود (روی گوشی‌های بدون نوتش این مقدار صفر است) */}
@@ -175,7 +177,7 @@ function AppContent() {
       {/* فوتر */}
       <footer className="mt-auto hidden border-t bg-card py-4 lg:block">
         <div className="mx-auto max-w-6xl px-4 text-center text-xs text-muted-foreground">
-          حساب‌یار — نسخه ۲.۱۴.۲ | اپلیکیشن آفلاین — ثبت خودکار پیامک بانکی + دستیار هوشمند
+          حساب‌یار — نسخه ۲.۱۴.۳ | اپلیکیشن آفلاین — ثبت خودکار پیامک بانکی + دستیار هوشمند
         </div>
       </footer>
 

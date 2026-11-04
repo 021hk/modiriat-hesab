@@ -530,16 +530,18 @@ function InstallmentCard({
     },
     onError: (e: Error) => toast({ title: "خطا", description: e.message, variant: "destructive" }),
   });
-  // حذف کل طرح قسط‌بندی وام — فقط اقساط پرداخت‌نشده (v2.14.2)
+  // حذف طرح قسط‌بندی وام (v2.14.2) + حذف کامل حتی پرداخت‌شده‌ها (v2.14.3)
   const delPlan = useMutation({
-    mutationFn: () => api.del<{ deleted: number; keptPaid: number }>(`/api/installments/plan/${inst.planId}`),
-    onSuccess: (res) => {
+    mutationFn: (all: boolean) => api.del<{ deleted: number; keptPaid: number }>(`/api/installments/plan/${inst.planId}${all ? "?all=1" : ""}`),
+    onSuccess: (res, all) => {
       qc.invalidateQueries({ queryKey: ["installments"] });
       qc.invalidateQueries({ queryKey: ["stats"] });
       void syncInstallmentNotifications();
       toast({
-        title: "طرح حذف شد",
-        description: `${res.deleted.toLocaleString("fa-IR", { useGrouping: false })} قسط باقی‌مانده حذف شد${res.keptPaid > 0 ? " — پرداخت‌شده‌ها ماندند" : ""}`,
+        title: all ? "طرح کامل حذف شد" : "طرح حذف شد",
+        description: all
+          ? `${res.deleted.toLocaleString("fa-IR", { useGrouping: false })} قسط از کل طرح حذف شد${res.keptPaid > 0 ? " (شامل پرداخت‌شده‌ها)" : ""}`
+          : `${res.deleted.toLocaleString("fa-IR", { useGrouping: false })} قسط باقی‌مانده حذف شد${res.keptPaid > 0 ? " — پرداخت‌شده‌ها ماندند" : ""}`,
       });
     },
     onError: (e: Error) => toast({ title: "خطا", description: e.message, variant: "destructive" }),
@@ -646,10 +648,23 @@ function InstallmentCard({
               className="text-red-600 hover:text-red-700"
               disabled={delPlan.isPending}
               onClick={() => {
-                if (window.confirm("همهٔ قسط‌های پرداخت‌نشدهٔ این طرح حذف شود؟ (پرداخت‌شده‌ها می‌مانند)")) delPlan.mutate();
+                if (window.confirm("همهٔ قسط‌های پرداخت‌نشدهٔ این طرح حذف شود؟ (پرداخت‌شده‌ها می‌مانند)")) delPlan.mutate(false);
               }}
             >
-              <Trash2 className="ml-1 h-3.5 w-3.5" /> حذف کل طرح
+              <Trash2 className="ml-1 h-3.5 w-3.5" /> حذف باقی‌ماندهٔ طرح
+            </Button>
+          )}
+          {inst.planId && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-red-600 hover:text-red-700"
+              disabled={delPlan.isPending}
+              onClick={() => {
+                if (window.confirm("حذف کامل طرح؟ تمام اقساط این طرح — حتی پرداخت‌شده‌ها — برای همیشه پاک می‌شوند.")) delPlan.mutate(true);
+              }}
+            >
+              <Trash2 className="ml-1 h-3.5 w-3.5" /> حذف کامل طرح
             </Button>
           )}
         </div>

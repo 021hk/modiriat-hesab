@@ -203,3 +203,224 @@
 .tabular-nums-persian {
   font-variant-numeric: tabular-nums;
 }
+
+/* ─────────────────────────────────────────────────────────────
+   تم‌های رنگی (v2.14.3) — رنگ اصلی با data-accent روی <html>
+   کلاس‌های emerald در Tailwind v4 به var(--color-emerald-...) اشاره می‌کنند؛
+   پس بازنویسی همین متغیرها کل برنامه را هم‌رنگ می‌کند.
+   ───────────────────────────────────────────────────────────── */
+
+/* متغیرهای گوی هوشمند — پیش‌فرض سبز */
+:root {
+  --orb-hi: #a7f3d0;
+  --orb-mid: #34d399;
+  --orb-deep: #059669;
+  --orb-dark: #064e3b;
+  --orb-glow: rgba(5, 150, 105, 0.45);
+}
+
+/* ─── بنفش ─── */
+html[data-accent="banafsh"] {
+  --primary: #7c3aed;
+  --ring: #7c3aed;
+  --chart-1: #7c3aed;
+  --sidebar-primary: #7c3aed;
+  --orb-hi: #ddd6fe;
+  --orb-mid: #a78bfa;
+  --orb-deep: #7c3aed;
+  --orb-dark: #4c1d95;
+  --orb-glow: rgba(124, 58, 237, 0.45);
+  --color-emerald-50: #f5f3ff;
+  --color-emerald-100: #ede9fe;
+  --color-emerald-200: #ddd6fe;
+  --color-emerald-300: #c4b5fd;
+  --color-emerald-400: #a78bfa;
+  --color-emerald-500: #8b5cf6;
+  --color-emerald-600: #7c3aed;
+  --color-emerald-700: #6d28d9;
+  --color-emerald-800: #5b21b6;
+  --color-emerald-900: #4c1d95;
+  --color-emerald-950: #2e1065;
+}
+html[data-accent="banafsh"].dark {
+  --primary: #a78bfa;
+  --ring: #a78bfa;
+  --chart-1: #a78bfa;
+  --sidebar-primary: #a78bfa;
+  --orb-hi: #ede9fe;
+  --orb-mid: #8b5cf6;
+  --orb-deep: #6d28d9;
+  --orb-dark: #2e1065;
+  --orb-glow: rgba(139, 92, 246, 0.5);
+}
+
+/* ─── آبی ─── */
+html[data-accent="abi"] {
+  --primary: #2563eb;
+  --ring: #2563eb;
+  --chart-1: #2563eb;
+  --sidebar-primary: #2563eb;
+  --orb-hi: #bfdbfe;
+  --orb-mid: #60a5fa;
+  --orb-deep: #2563eb;
+  --orb-dark: #1e3a8a;
+  --orb-glow: rgba(37, 99, 235, 0.45);
+  --color-emerald-50: #eff6ff;
+  --color-emerald-100: #dbeafe;
+  --color-emerald-200: #bfdbfe;
+  --color-emerald-300: #93c5fd;
+  --color-emerald-400: #60a5fa;
+  --color-emerald-500: #3b82f6;
+  --color-emerald-600: #2563eb;
+  --color-emerald-700: #1d4ed8;
+  --color-emerald-800: #1e40af;
+  --color-emerald-900: #1e3a8a;
+  --color-emerald-950: #172554;
+}
+html[data-accent="abi"].dark {
+  --primary: #60a5fa;
+  --ring: #60a5fa;
+  --chart-1: #60a5fa;
+  --sidebar-primary: #60a5fa;
+  --orb-hi: #dbeafe;
+  --orb-mid: #3b82f6;
+  --orb-deep: #1d4ed8;
+  --orb-dark: #172554;
+  --orb-glow: rgba(59, 130, 246, 0.5);
+}
+
+/* ─── آسمانی ─── */
+html[data-accent="asemani"] {
+  --primary: #0284c7;
+  --ring: #0284c7;
+  --chart-1: #0284c7;
+  --sidebar-primary: #0284c7;
+  --orb-hi: #bae6fd;
+  --orb-mid: #38bdf8;
+  --orb-deep: #0284c7;
+  --orb-dark: #0c4a6e;
+  --orb-glow: rgba(2, 132, 199, 0.45);
+  --color-emerald-50: #f0f9ff;
+  --color-emerald-100: #e0f2fe;
+  --color-emerald-200: #bae6fd;
+  --color-emerald-300: #7dd3fc;
+  --color-emerald-400: #38bdf8;
+  --color-emerald-500: #0ea5e9;
+  --color-emerald-600: #0284c7;
+  --color-emerald-700: #0369a1;
+  --color-emerald-800: #075985;
+  --color-emerald-900: #0c4a6e;
+  --color-emerald-950: #082f49;
+}
+html[data-accent="asemani"].dark {
+  --primary: #38bdf8;
+  --ring: #38bdf8;
+  --chart-1: #38bdf8;
+  --sidebar-primary: #38bdf8;
+  --orb-hi: #e0f2fe;
+  --orb-mid: #0ea5e9;
+  --orb-deep: #0369a1;
+  --orb-dark: #082f49;
+  --orb-glow: rgba(14, 165, 233, 0.5);
+}
+
+/* ─── زرد (طلایی/کهربایی) ─── */
+html[data-accent="zard"] {
+  --primary: #b45309;
+  --ring: #b45309;
+  --chart-1: #d97706;
+  --sidebar-primary: #b45309;
+  --orb-hi: #fde68a;
+  --orb-mid: #fbbf24;
+  --orb-deep: #d97706;
+  --orb-dark: #78350f;
+  --orb-glow: rgba(217, 119, 6, 0.45);
+  --color-emerald-50: #fffbeb;
+  --color-emerald-100: #fef3c7;
+  --color-emerald-200: #fde68a;
+  --color-emerald-300: #fcd34d;
+  --color-emerald-400: #fbbf24;
+  --color-emerald-500: #f59e0b;
+  --color-emerald-600: #d97706;
+  --color-emerald-700: #b45309;
+  --color-emerald-800: #92400e;
+  --color-emerald-900: #78350f;
+  --color-emerald-950: #451a03;
+}
+html[data-accent="zard"].dark {
+  --primary: #fbbf24;
+  --ring: #fbbf24;
+  --chart-1: #fbbf24;
+  --sidebar-primary: #fbbf24;
+  --orb-hi: #fef3c7;
+  --orb-mid: #f59e0b;
+  --orb-deep: #b45309;
+  --orb-dark: #451a03;
+  --orb-glow: rgba(245, 158, 11, 0.5);
+}
+
+/* ─────────────────────────────────────────────────────────────
+   تم‌های ویژهٔ پس‌زمینه (data-special) — بعد از accent تعریف می‌شوند
+   ───────────────────────────────────────────────────────────── */
+
+/* مشکی کامل — OLED */
+html[data-special="meshki"] {
+  --background: #000000;
+  --foreground: #f4f4f5;
+  --card: #0c0c0e;
+  --card-foreground: #f4f4f5;
+  --popover: #0c0c0e;
+  --popover-foreground: #f4f4f5;
+  --secondary: #151517;
+  --secondary-foreground: #f4f4f5;
+  --muted: #151517;
+  --muted-foreground: #a1a1aa;
+  --accent: #1b1b1f;
+  --accent-foreground: #f4f4f5;
+  --border: #26262a;
+  --input: #26262a;
+  --sidebar: #0c0c0e;
+  --sidebar-foreground: #f4f4f5;
+  --sidebar-accent: #1b1b1f;
+  --sidebar-accent-foreground: #f4f4f5;
+  --sidebar-border: #26262a;
+}
+
+/* کهکشانی — فضای ستاره‌باران */
+html[data-special="kahkeshani"] {
+  --background: #050817;
+  --foreground: #e7eaf6;
+  --card: #0d1330;
+  --card-foreground: #e7eaf6;
+  --popover: #0d1330;
+  --popover-foreground: #e7eaf6;
+  --secondary: #141b3c;
+  --secondary-foreground: #e7eaf6;
+  --muted: #141b3c;
+  --muted-foreground: #8e97c4;
+  --accent: #1a2248;
+  --accent-foreground: #e7eaf6;
+  --border: #27315e;
+  --input: #27315e;
+  --sidebar: #0d1330;
+  --sidebar-foreground: #e7eaf6;
+  --sidebar-accent: #1a2248;
+  --sidebar-accent-foreground: #e7eaf6;
+  --sidebar-border: #27315e;
+}
+
+/* ─── انیمیشن ستاره‌های کهکشان ─── */
+@keyframes hy-twinkle {
+  0%, 100% { opacity: 0.12; transform: scale(0.75); }
+  50% { opacity: 1; transform: scale(1.2); }
+}
+@keyframes hy-drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(26px, -20px) scale(1.12); }
+}
+@keyframes hy-shoot {
+  0% { transform: translate3d(0, 0, 0) rotate(-32deg); opacity: 0; }
+  6% { opacity: 1; }
+  22% { transform: translate3d(-64vw, 42vh, 0) rotate(-32deg); opacity: 0; }
+  100% { transform: translate3d(-64vw, 42vh, 0) rotate(-32deg); opacity: 0; }
+}

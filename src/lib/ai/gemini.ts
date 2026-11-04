@@ -19,6 +19,32 @@ const GEMINI_URL = (model: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 const GEMINI_LIST_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 const MODEL_CACHE_KEY = "hesab-yar:gemini-model";
+// اتصال‌های ایران/VPN گاهی قطع‌ووصل می‌شوند — هر تلاش حداکثر ۴۰ ثانیه و کل ۳ بار امتحان می‌شود
+export const GEMINI_TIMEOUT_MS = 40000;
+export const GEMINI_NET_ATTEMPTS = 3;
+export const GEMINI_NET_FAIL_MSG =
+  "سرور Gemini در دسترس نیست — اتصال اینترنت (و در ایران VPN) را بررسی کنید و دوباره امتحان کنید. " +
+  `برنامه ${GEMINI_NET_ATTEMPTS.toLocaleString("fa-IR", { useGrouping: false })} بار تلاش خودکار کرد که پاسخی نرسید.`;
+
+/** ساخت بدنهٔ درخواست — خالص و قابل‌تست */
+export function buildGeminiBody(model: string, systemPrompt: string, history: AiChatMessage[]): Record<string, unknown> {
+  const generationConfig: Record<string, unknown> = {
+    temperature: 0.3,
+    maxOutputTokens: 1024,
+    responseMimeType: "application/json",
+  };
+  // فقط مدل‌های ۲.۵ حالت «تفکر» دارند که پاسخ را خیلی کند می‌کند — خاموشش می‌کنیم (v2.14.3)
+  if (/2\.5/.test(model)) generationConfig.thinkingConfig = { thinkingBudget: 0 };
+  return {
+    system_instruction: { parts: [{ text: systemPrompt }] },
+    contents: history.map((h) => ({ role: h.role, parts: [{ text: h.text }] })),
+    generationConfig,
+  };
+}
+
+function sleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
 function readCachedModel(): string | null {
   try {
@@ -80,11 +106,28 @@ export function resetGeminiModelCache(): void {
  * فهرست مدل‌های مجاز این کلید را از گوگل می‌گیرد — برای «تست اتصال» و انتخاب خودکار مدل.
  */
 export async function listGeminiModels(apiKey: string): Promise<{ ok: boolean; models: GeminiModelInfo[]; message: string }> {
-  let res: Response;
-  try {
-    res = await fetch(GEMINI_LIST_URL, { headers: { "x-goog-api-key": apiKey } });
-  } catch {
-    return { ok: false, models: [], message: "اتصال اینترنت برقرار نشد — برای دستیار هوشمند به اینترنت (و در ایران معمولاً VPN) نیاز است." };
+  let res: Response | null = null;
+  let timedOut = false;
+  for (let attempt = 0; attempt < 2 && !res; attempt++) {
+    const ac = new AbortController();
+    const timer = setTimeout(() => ac.abort("timeout"), 20000);
+    try {
+      res = await fetch(GEMINI_LIST_URL, { headers: { "x-goog-api-key": apiKey }, signal: ac.signal });
+    } catch {
+      timedOut = ac.signal.aborted;
+      if (attempt === 0) await sleep(900);
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  if (!res) {
+    return {
+      ok: false,
+      models: [],
+      message: timedOut
+        ? "پاسخی از سرور Gemini نرسید (تایم‌اوت) — اتصال اینترنت/VPN را بررسی کنید و دوباره امتحان کنید."
+        : "اتصال اینترنت برقرار نشد — برای دستیار هوشمند به اینترنت (و در ایران معمولاً VPN) نیاز است.",
+    };
   }
   if (!res.ok) {
     const t = await res.text().catch(() => "");
@@ -218,60 +261,70 @@ export interface GeminiCallResult {
 }
 
 /**
- * فراخوانی generateContent با جای‌گردی مدل (v2.14.2):
- * ۱) اول مدل کش‌شدهٔ دستگاه یا پیش‌فرض؛ ۲) روی خطای 404 («مدل پیدا نشد») کش پاک و
- * فهرست واقعی مدل‌های کلید خوانده و بهترین مدل انتخاب می‌شود؛ ۳) اگر فهرست هم نشد،
- * لیست ثابت یکی‌یکی امتحان می‌شود. مدل موفق کش می‌شود تا تماس بعدی مستقیم برود.
+ * یک فراخوانی مدل با سقف زمانی (v2.14.3) — خطای شبکه null برمی‌گرداند.
+ */
+async function doCallOnce(model: string, body: Record<string, unknown>, apiKey: string): Promise<{ status: number; ok: boolean; text: string } | null> {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort("timeout"), GEMINI_TIMEOUT_MS);
+  try {
+    const res = await fetch(GEMINI_URL(model), {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
+      body: JSON.stringify(body),
+      signal: ac.signal,
+    });
+    if (res.ok) {
+      const json = (await res.json()) as {
+        candidates?: { content?: { parts?: { text?: string }[] } }[];
+        promptFeedback?: { blockReason?: string };
+      };
+      const parts = json.candidates?.[0]?.content?.parts || [];
+      const text = parts.map((p) => p.text || "").join("").trim();
+      if (!text) {
+        const blocked = json.promptFeedback?.blockReason;
+        return { status: res.status, ok: false, text: blocked ? `درخواست توسط Gemini مسدود شد (${blocked})` : "پاسخی از Gemini نرسید — دوباره امتحان کنید." };
+      }
+      return { status: res.status, ok: true, text };
+    }
+    const t = await res.text().catch(() => "");
+    return { status: res.status, ok: false, text: geminiErrorToPersian(res.status, t) };
+  } catch {
+    return null; // خطای شبکه یا تایم‌اوت — بیرون دوباره امتحان/گزارش می‌شود
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/** تلاش مجدد خودکار روی خطای شبکه (بدون پاسخ HTTP) — v2.14.3 */
+async function doCallWithRetry(model: string, body: Record<string, unknown>, apiKey: string, attempts = GEMINI_NET_ATTEMPTS): Promise<{ status: number; ok: boolean; text: string } | null> {
+  for (let i = 0; i < attempts; i++) {
+    const r = await doCallOnce(model, body, apiKey);
+    if (r !== null) return r; // پاسخ HTTP (حتی خطا) — تکرار شبکه لازم نیست
+    if (i < attempts - 1) await sleep(900 * (i + 1)); // ۰٫۹ و ۱٫۸ ثانیه انتظار
+  }
+  return null;
+}
+
+/**
+ * فراخوانی generateContent با جای‌گردی مدل (v2.14.2) + تایم‌اوت و تلاش مجدد شبکه (v2.14.3):
+ * ۱) اول مدل کش‌شدهٔ دستگاه یا پیش‌فرض (۳ تلاش برای شبکه)؛ ۲) روی خطای 404 («مدل نیست»)
+ * کش پاک و بهترین مدل از فهرست واقعی کلید انتخاب می‌شود؛ ۳) اگر فهرست نشد، لیست ثابت
+ * یکی‌یکی امتحان می‌شود. مدل موفق کش می‌شود تا تماس بعدی مستقیم برود.
  */
 export async function callGemini(opts: {
   apiKey: string;
   systemPrompt: string;
   history: AiChatMessage[];
 }): Promise<GeminiCallResult> {
-  const body = {
-    system_instruction: { parts: [{ text: opts.systemPrompt }] },
-    contents: opts.history.map((h) => ({ role: h.role, parts: [{ text: h.text }] })),
-    generationConfig: {
-      temperature: 0.3,
-      maxOutputTokens: 2048,
-      responseMimeType: "application/json",
-    },
-  };
-  const doCall = async (model: string): Promise<{ status: number; ok: boolean; text: string } | null> => {
-    try {
-      const res = await fetch(GEMINI_URL(model), {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "x-goog-api-key": opts.apiKey },
-        body: JSON.stringify(body),
-      });
-      if (res.ok) {
-        const json = (await res.json()) as {
-          candidates?: { content?: { parts?: { text?: string }[] } }[];
-          promptFeedback?: { blockReason?: string };
-        };
-        const parts = json.candidates?.[0]?.content?.parts || [];
-        const text = parts.map((p) => p.text || "").join("").trim();
-        if (!text) {
-          const blocked = json.promptFeedback?.blockReason;
-          return { status: res.status, ok: false, text: blocked ? `درخواست توسط Gemini مسدود شد (${blocked})` : "پاسخی از Gemini نرسید — دوباره امتحان کنید." };
-        }
-        return { status: res.status, ok: true, text };
-      }
-      const t = await res.text().catch(() => "");
-      return { status: res.status, ok: false, text: geminiErrorToPersian(res.status, t) };
-    } catch {
-      return null; // خطای شبکه — بیرون گزارش می‌شود
-    }
-  };
-
-  // ۱) مدل کش‌شده یا پیش‌فرض
+  // ۱) مدل کش‌شده یا پیش‌فرض — با تلاش مجدد شبکه
   const first = readCachedModel() || GEMINI_MODEL;
-  let r = await doCall(first);
+  const body = buildGeminiBody(first, opts.systemPrompt, opts.history);
+  const r = await doCallWithRetry(first, body, opts.apiKey);
   if (r?.ok) {
     writeCachedModel(first);
     return { ok: true, text: r.text };
   }
-  if (r === null) return { ok: false, text: "اتصال اینترنت برقرار نشد — برای دستیار هوشمند به اینترنت نیاز است." };
+  if (r === null) return { ok: false, text: GEMINI_NET_FAIL_MSG };
 
   // ۲) فقط 404 یعنی «مدل نیست» → بقیهٔ خطاها مستقیم گزارش می‌شوند (کلید/سقف/...)
   if (r.status !== 404) return { ok: false, text: r.text };
@@ -282,7 +335,7 @@ export async function callGemini(opts: {
   if (listed.ok) {
     const pick = pickGeminiModel(listed.models);
     if (pick && pick !== first) {
-      const r2 = await doCall(pick);
+      const r2 = await doCallOnce(pick, buildGeminiBody(pick, opts.systemPrompt, opts.history), opts.apiKey);
       if (r2?.ok) {
         writeCachedModel(pick);
         return { ok: true, text: r2.text };
@@ -291,10 +344,10 @@ export async function callGemini(opts: {
     }
   }
 
-  // ۴) لیست ثابت — هر مدلی که 404 نداد
+  // ۴) لیست ثابت — هر مدلی که 404 نداد (بدون تکرار شبکه تا طولانی نشود)
   for (const m of GEMINI_MODELS) {
     if (m === first) continue;
-    const r3 = await doCall(m);
+    const r3 = await doCallOnce(m, buildGeminiBody(m, opts.systemPrompt, opts.history), opts.apiKey);
     if (r3?.ok) {
       writeCachedModel(m);
       return { ok: true, text: r3.text };
