@@ -23,7 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Sun, Moon, MoonStar, Monitor, Coins, Info, SunMoon, RefreshCw, Download, CheckCircle2, AlertTriangle, ExternalLink, Wand2, Plus, Pencil, Trash2, Sparkles, BellRing, Volume2, ShieldCheck, Loader2 } from "lucide-react";
+import { Sun, Moon, MoonStar, Monitor, Coins, Info, SunMoon, RefreshCw, Download, CheckCircle2, AlertTriangle, ExternalLink, Wand2, Plus, Pencil, Trash2, Sparkles, BellRing, Volume2, ShieldCheck, Loader2, Copy, ScrollText } from "lucide-react";
 import { Backup } from "@/components/hesab/backup";
 import {
   currencyLabel,
@@ -47,11 +47,12 @@ import {
 } from "@/lib/app-update";
 import { openExternalUrl } from "@/lib/native-sms";
 import { testGeminiConnection, cachedGeminiModel, resetGeminiModelCache, splitApiKeys, readGeminiProxy, setGeminiProxy } from "@/lib/ai/gemini";
+import { readGeminiLog, clearGeminiLog, geminiLogToText, GEMINI_LOG_EVENT, type GeminiLogEntry } from "@/lib/ai/gemini-log";
 import { ACCENTS, SPECIALS, applyAccent, applySpecial, readStoredAccent, readStoredSpecial, type AccentId, type SpecialId } from "@/lib/theme";
 import { checkNotifPermission, requestNotifPermission, syncInstallmentNotifications, fireTestNotification, notifSupported } from "@/lib/notifications";
 import type { AppSettings, NotifSettings } from "@/lib/client-api";
 
-const APP_VERSION = "۲.۱۵.۰";
+const APP_VERSION = "۲.۱۵.۱";
 
 function ThemeSection() {
   const { theme, setTheme } = useTheme();
@@ -856,10 +857,12 @@ function AiSection() {
           <p className="text-sm font-medium">پروکسی شخصی (اختیاری)</p>
           <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
             اگر VPN هم جواب نمی‌دهد، آدرس یک پروکسی واسط (مثل Cloudflare Worker خودتان) را وارد کنید؛
-            درخواست‌ها به جای گوگل به آن می‌روند و مسیر همان <span dir="ltr" className="font-mono">/v1beta/…</span> است. خالی = اتصال مستقیم.
+            درخواست‌ها به جای گوگل به آن می‌روند و مسیر همان <span dir="ltr" className="font-mono">/v1beta/…</span> است. خالی = اتصال مستقیم. آدرس باید با <span dir="ltr" className="font-mono">https://</span> شروع شود.
           </p>
           <ProxyRow />
         </div>
+        {/* لاگ تشخیصی (v2.15.1) — ببینیم اتصال دقیقاً کجا و چرا می‌شکند */}
+        <GeminiLogViewer />
         <p className="rounded-lg bg-muted/60 p-2.5 text-[11px] leading-5 text-muted-foreground">
           امنیت: کلیدها فقط روی خود دستگاه ذخیره می‌شوند. برای پاسخ به دستورها، متن درخواست به سرور Gemini
           (مستقیم یا از پروکسی شما) می‌رود؛ داده‌های حساس شما (شماره‌ها و جزئیات) خارج نمی‌شوند. اگر «مدل پیدا نشد» دیدید،
@@ -867,6 +870,106 @@ function AiSection() {
         </p>
       </CardContent>
     </Card>
+  );
+}
+
+// ─── نمایشگر لاگ اتصال Gemini (v2.15.1) — تشخیص علت قطعی ───
+
+function GeminiLogViewer() {
+  const { toast } = useToast();
+  const [entries, setEntries] = useState<GeminiLogEntry[]>([]);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    const update = () => setEntries(readGeminiLog());
+    update();
+    window.addEventListener(GEMINI_LOG_EVENT, update);
+    return () => window.removeEventListener(GEMINI_LOG_EVENT, update);
+  }, []);
+
+  const copy = async () => {
+    try {
+      await navigator.clipboard.writeText(geminiLogToText());
+      toast({ title: "لاگ کپی شد", description: "متن کپی‌شده را برای بررسی بفرستید" });
+    } catch {
+      toast({ title: "کپی نشد — دستگاه اجازه نداد", variant: "destructive" });
+    }
+  };
+
+  const dotColor: Record<string, string> = {
+    ok: "bg-emerald-500",
+    info: "bg-sky-500",
+    warn: "bg-amber-500",
+    error: "bg-red-500",
+  };
+
+  return (
+    <div className="rounded-xl border p-3">
+      <button
+        type="button"
+        className="flex w-full items-center justify-between gap-2"
+        onClick={() => setOpen((v) => !v)}
+        aria-expanded={open}
+      >
+        <span className="flex items-center gap-1.5 text-sm font-medium">
+          <ScrollText className="h-4 w-4" />
+          لاگ اتصال (تشخیصی)
+          {entries.length > 0 && (
+            <span className="rounded-full bg-muted px-1.5 text-[10px] tabular-nums">
+              {entries.length.toLocaleString("fa-IR", { useGrouping: false })}
+            </span>
+          )}
+        </span>
+        <span className="text-[10px] text-muted-foreground">{open ? "بستن ▲" : "باز کردن ▼"}</span>
+      </button>
+      <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
+        اگر دستیار وصل نشد، اینجا نوشته شده دقیقاً کجای مسیر شکسته. اول «تست اتصال» را بزنید، بعد لاگ را کپی و بفرستید.
+      </p>
+      {open && (
+        <div className="mt-2 space-y-2">
+          <div className="flex flex-wrap items-center gap-2">
+            <Button size="sm" variant="outline" disabled={entries.length === 0} onClick={() => void copy()}>
+              <Copy className="ml-1 h-3.5 w-3.5" />
+              کپی لاگ
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              disabled={entries.length === 0}
+              onClick={() => {
+                clearGeminiLog();
+                setEntries([]);
+              }}
+            >
+              <Trash2 className="ml-1 h-3.5 w-3.5" />
+              پاک کردن
+            </Button>
+          </div>
+          {entries.length === 0 ? (
+            <p className="rounded-lg bg-muted/60 p-2 text-[11px] text-muted-foreground">هنوز لاگی نیست — بعد از زدن «تست اتصال» اینجا پر می‌شود.</p>
+          ) : (
+            <ul className="max-h-60 space-y-1.5 overflow-y-auto rounded-lg bg-muted/40 p-2">
+              {entries.map((e) => (
+                <li key={e.id} className="flex items-start gap-1.5">
+                  <span className={`mt-1.5 h-2 w-2 shrink-0 rounded-full ${dotColor[e.level] || "bg-muted-foreground"}`} />
+                  <span className="min-w-0 flex-1">
+                    <span className="block text-[11px] leading-5">{e.msg}</span>
+                    <span className="block text-[10px] leading-4 text-muted-foreground">
+                      {new Date(e.t).toLocaleTimeString("fa-IR", { hour: "2-digit", minute: "2-digit", second: "2-digit" })}
+                      {e.detail ? (
+                        <span dir="ltr" className="ml-1 inline-block break-all font-mono text-[9px]">
+                          {e.detail}
+                        </span>
+                      ) : null}
+                    </span>
+                  </span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -892,6 +995,11 @@ function ProxyRow() {
         value={shown}
         onChange={(e) => setProxyInput(e.target.value)}
       />
+      {proxyInput !== null && /^http:\/\//i.test(proxyInput.trim()) && (
+        <p className="text-[11px] leading-5 text-red-600 dark:text-red-400">
+          آدرس پروکسی باید با https:// شروع شود — اتصال رمزنشده (http) به دلیل امنیت پذیرفته نمی‌شود.
+        </p>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         <Button
           size="sm"

@@ -5,6 +5,9 @@
 
 // چندمدلی (v2.14.2): گوگل مدل‌ها را بازنشسته می‌کند — روی 404 مدل بعدی امتحان می‌شود
 // و مدلی که جواب داد کش می‌شود تا درخواست بعدی مستقیم همان برود.
+// لاگ تشخیصی (v2.15.1): هر گام اتصال در «لاگ اتصال» تنظیمات ثبت می‌شود تا علت قطعی پیدا شود.
+import { clipBody, maskKey, pushGeminiLog } from "./gemini-log";
+
 export const GEMINI_MODELS = [
   "gemini-2.0-flash",
   "gemini-2.5-flash",
@@ -23,10 +26,11 @@ export const GEMINI_MODEL = GEMINI_MODELS[0]; // پیش‌فرض — برای س
 export const GEMINI_DEFAULT_BASE = "https://generativelanguage.googleapis.com";
 export const PROXY_STORAGE_KEY = "hesab-yar:gemini-proxy";
 
-/** پاک‌سازی آدرس پروکسی — خالص و قابل‌تست: فقط http/https با میزبان معتبر */
+/** پاک‌سازی آدرس پروکسی — خالص و قابل‌تست: فقط https (سازگار با اسکن امنیتی گوگل‌پلی؛
+ *  http یعنی ترافیک رمزنشده و در WebView با مبدأ https هم به‌هرحال مسدود است) */
 export function normalizeProxyUrl(raw: string | null | undefined): string | null {
   const s = String(raw || "").trim().replace(/\/+$/, "");
-  if (!/^https?:\/\/[^\s/]+/i.test(s)) return null;
+  if (!/^https:\/\/[^\s/]+/i.test(s)) return null;
   return s;
 }
 
@@ -98,14 +102,34 @@ export function networkFailMessage(googleReachable: boolean): string {
 export async function probeGoogleReachable(timeoutMs = 7000): Promise<boolean> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort("timeout"), timeoutMs);
+  const t0 = Date.now();
   try {
     await fetch(GOOGLE_PROBE_URL, { mode: "no-cors", cache: "no-store", signal: ac.signal });
+    pushGeminiLog({ level: "ok", phase: "probe", msg: "گوگل در دسترس است — اینترنت دستگاه کار می‌کند", detail: `${Date.now() - t0}ms` });
     return true;
-  } catch {
+  } catch (e) {
+    pushGeminiLog({ level: "warn", phase: "probe", msg: "گوگل در دسترس نیست — اتصال اینترنت مشکل دارد", detail: `${Date.now() - t0}ms ${abortReason(e, ac)}` });
     return false;
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** میزبان پایهٔ فعلی (پروکسی یا گوگل) برای جزئیات لاگ */
+function safeHost(base: string): string {
+  try {
+    return new URL(base).host;
+  } catch {
+    return base;
+  }
+}
+
+/** علت رد شدن fetch — تایم‌اوت یا خطای شبکه */
+function abortReason(e: unknown, ac: AbortController): string {
+  const r = ac.signal.reason as unknown;
+  if (r === "timeout" || r === "TimeoutError") return "timeout";
+  const m = e instanceof Error ? e.message : String(e ?? "error");
+  return /abort/i.test(m) ? "abort" : m.slice(0, 80);
 }
 
 /** ساخت بدنهٔ درخواست — خالص و قابل‌تست */
@@ -187,20 +211,28 @@ export function resetGeminiModelCache(): void {
 /**
  * فهرست مدل‌های مجاز این کلید را از گوگل می‌گیرد — برای «تست اتصال» و انتخاب خودکار مدل.
  */
-export async function listGeminiModels(apiKey: string): Promise<{ ok: boolean; models: GeminiModelInfo[]; message: string }> {
+export async function listGeminiModels(apiKey: string, keyLabel?: string): Promise<{ ok: boolean; models: GeminiModelInfo[]; message: string }> {
+  const label = keyLabel || maskKey(apiKey);
+  const hostName = safeHost(geminiBase());
+  const t0 = Date.now();
   let res: Response | null = null;
+  let lastErr = "";
   for (let attempt = 0; attempt < 2 && !res; attempt++) {
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort("timeout"), 15000);
     try {
       res = await fetch(GEMINI_LIST_URL(), { headers: { "x-goog-api-key": apiKey }, signal: ac.signal });
-    } catch {
+      pushGeminiLog({ level: "info", phase: "list", msg: `فهرست مدل‌ها — پاسخ HTTP ${res.status} برای ${label}`, detail: `host=${hostName} ${Date.now() - t0}ms` });
+    } catch (e) {
+      lastErr = abortReason(e, ac);
+      pushGeminiLog({ level: "warn", phase: "list", msg: `تلاش ${attempt + 1} از ۲ — سرور جواب نداد (${label})`, detail: `host=${hostName} ${Date.now() - t0}ms ${lastErr}` });
       if (attempt === 0) await sleep(900);
     } finally {
       clearTimeout(timer);
     }
   }
   if (!res) {
+    pushGeminiLog({ level: "error", phase: "list", msg: "اتصال به سرور برقرار نشد — هر ۲ تلاش بی‌پاسخ بود", detail: `host=${hostName} ${lastErr}` });
     // با پروکسی شخصی، آزمون گوگل معنا ندارد — خطای خود پروکسی گزارش می‌شود (v2.15)
     if (usingProxy()) return { ok: false, models: [], message: PROXY_NET_FAIL_MSG };
     // تشخیص دقیق: گوگل در دسترس است ولی Gemini نه → تحریم منطقه‌ای؛ وگرنه قطعی اینترنت
@@ -209,13 +241,19 @@ export async function listGeminiModels(apiKey: string): Promise<{ ok: boolean; m
   }
   if (!res.ok) {
     const t = await res.text().catch(() => "");
+    pushGeminiLog({ level: "error", phase: "list", msg: `خطای HTTP ${res.status} در گرفتن فهرست مدل‌ها`, detail: `host=${hostName} | ${clipBody(t)}` });
     return { ok: false, models: [], message: geminiErrorToPersian(res.status, t) };
   }
   try {
     const models = parseModelsList(await res.json());
-    if (models.length === 0) return { ok: false, models: [], message: "هیچ مدلی برای این کلید در دسترس نیست — کلید جدیدی از aistudio.google.com/apikey بگیرید." };
+    if (models.length === 0) {
+      pushGeminiLog({ level: "error", phase: "list", msg: "سرور فهرست مدل‌ها را خالی برگرداند", detail: `host=${hostName}` });
+      return { ok: false, models: [], message: "هیچ مدلی برای این کلید در دسترس نیست — کلید جدیدی از aistudio.google.com/apikey بگیرید." };
+    }
+    pushGeminiLog({ level: "ok", phase: "list", msg: `فهرست مدل‌ها رسید — ${models.length} مدل برای ${label}`, detail: `host=${hostName} ${Date.now() - t0}ms` });
     return { ok: true, models, message: "اتصال موفق" };
   } catch {
+    pushGeminiLog({ level: "error", phase: "list", msg: "پاسخ فهرست مدل‌ها قابل خواندن نبود", detail: `host=${hostName}` });
     return { ok: false, models: [], message: "پاسخ Gemini قابل خواندن نبود — دوباره امتحان کنید." };
   }
 }
@@ -230,15 +268,23 @@ export interface GeminiTestResult {
 export async function testGeminiConnection(apiKey: string): Promise<GeminiTestResult> {
   const keys = splitApiKeys(apiKey);
   if (keys.length === 0) return { ok: false, model: null, message: "اول کلید Gemini را وارد و ذخیره کنید." };
-  const results = await Promise.all(keys.map((k) => listGeminiModels(k)));
+  pushGeminiLog({
+    level: "info",
+    phase: "system",
+    msg: `«تست اتصال» شروع شد — ${keys.length} کلید`,
+    detail: usingProxy() ? `proxy=${safeHost(geminiBase())}` : "proxy=off (مستقیم به گوگل)",
+  });
+  const results = await Promise.all(keys.map((k, i) => listGeminiModels(k, `کلید ${(i + 1).toLocaleString("fa-IR", { useGrouping: false })}`)));
   const okIdx = results.findIndex((r) => r.ok);
   const model = okIdx > -1 ? pickGeminiModel(results[okIdx].models) : null;
   if (okIdx === -1 || !model) {
     const firstFail = results.find((r) => !r.ok);
+    pushGeminiLog({ level: "error", phase: "system", msg: "تست اتصال ناموفق — هیچ کلیدی وصل نشد", detail: `keys=${keys.length}` });
     return { ok: false, model: null, message: firstFail?.message || "هیچ مدلی با این کلیدها قابل استفاده نیست — کلید جدیدی بگیرید." };
   }
   writeCachedModel(model);
   const okCount = results.filter((r) => r.ok).length;
+  pushGeminiLog({ level: "ok", phase: "system", msg: `تست اتصال موفق — مدل «${model}» انتخاب و کش شد`, detail: `${okCount}/${keys.length} کلید سالم` });
   const keyInfo =
     keys.length > 1
       ? ` کلیدها: ${okCount.toLocaleString("fa-IR", { useGrouping: false })} سالم از ${keys.length.toLocaleString("fa-IR", { useGrouping: false })}.`
@@ -352,6 +398,7 @@ export interface GeminiCallResult {
 async function doCallOnce(model: string, body: Record<string, unknown>, apiKey: string): Promise<{ status: number; ok: boolean; text: string } | null> {
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort("timeout"), GEMINI_TIMEOUT_MS);
+  const t0 = Date.now();
   try {
     const res = await fetch(GEMINI_URL(model), {
       method: "POST",
@@ -359,6 +406,7 @@ async function doCallOnce(model: string, body: Record<string, unknown>, apiKey: 
       body: JSON.stringify(body),
       signal: ac.signal,
     });
+    const ms = Date.now() - t0;
     if (res.ok) {
       const json = (await res.json()) as {
         candidates?: { content?: { parts?: { text?: string }[] } }[];
@@ -368,14 +416,21 @@ async function doCallOnce(model: string, body: Record<string, unknown>, apiKey: 
       const text = parts.map((p) => p.text || "").join("").trim();
       if (!text) {
         const blocked = json.promptFeedback?.blockReason;
-        return { status: res.status, ok: false, text: blocked ? `درخواست توسط Gemini مسدود شد (${blocked})` : "پاسخی از Gemini نرسید — دوباره امتحان کنید." };
+        const msg = blocked ? `درخواست توسط Gemini مسدود شد (${blocked})` : "پاسخی از Gemini نرسید — دوباره امتحان کنید.";
+        pushGeminiLog({ level: "error", phase: "call", msg, detail: `model=${model} status=${res.status} ${ms}ms` });
+        return { status: res.status, ok: false, text: msg };
       }
+      pushGeminiLog({ level: "ok", phase: "call", msg: `پاسخ مدل «${model}» رسید`, detail: `status=200 ${ms}ms` });
       return { status: res.status, ok: true, text };
     }
     const t = await res.text().catch(() => "");
-    return { status: res.status, ok: false, text: geminiErrorToPersian(res.status, t) };
-  } catch {
-    return null; // خطای شبکه یا تایم‌اوت — بیرون دوباره امتحان/گزارش می‌شود
+    const persian = geminiErrorToPersian(res.status, t);
+    pushGeminiLog({ level: "error", phase: "call", msg: persian, detail: `model=${model} status=${res.status} ${ms}ms | ${clipBody(t)}` });
+    return { status: res.status, ok: false, text: persian };
+  } catch (e) {
+    // خطای شبکه یا تایم‌اوت — بیرون دوباره امتحان/گزارش می‌شود
+    pushGeminiLog({ level: "warn", phase: "call", msg: `مدل «${model}» پاسخ نداد (خطای شبکه یا تایم‌اوت)`, detail: `${Date.now() - t0}ms ${abortReason(e, ac)}` });
+    return null;
   } finally {
     clearTimeout(timer);
   }
@@ -384,10 +439,12 @@ async function doCallOnce(model: string, body: Record<string, unknown>, apiKey: 
 /** تلاش مجدد خودکار روی خطای شبکه (بدون پاسخ HTTP) — v2.14.3 */
 async function doCallWithRetry(model: string, body: Record<string, unknown>, apiKey: string, attempts = GEMINI_NET_ATTEMPTS): Promise<{ status: number; ok: boolean; text: string } | null> {
   for (let i = 0; i < attempts; i++) {
+    if (i > 0) pushGeminiLog({ level: "info", phase: "call", msg: `تلاش مجدد ${(i + 1).toLocaleString("fa-IR", { useGrouping: false })} از ${attempts.toLocaleString("fa-IR", { useGrouping: false })} برای مدل «${model}»` });
     const r = await doCallOnce(model, body, apiKey);
     if (r !== null) return r; // پاسخ HTTP (حتی خطا) — تکرار شبکه لازم نیست
     if (i < attempts - 1) await sleep(900 * (i + 1)); // ۰٫۹ و ۱٫۸ ثانیه انتظار
   }
+  pushGeminiLog({ level: "error", phase: "call", msg: `مدل «${model}» بعد از ${attempts.toLocaleString("fa-IR", { useGrouping: false })} تلاش پاسخ نداد`, detail: usingProxy() ? `proxy=${safeHost(geminiBase())}` : "host=generativelanguage.googleapis.com" });
   return null;
 }
 
@@ -406,7 +463,10 @@ async function tryWithKey(
     writeCachedModel(first);
     return { ok: true, text: r.text };
   }
-  if (r === null) return { ok: false, text: usingProxy() ? PROXY_NET_FAIL_MSG : GEMINI_NET_FAIL_MSG, network: true };
+  if (r === null) {
+    pushGeminiLog({ level: "error", phase: "call", msg: usingProxy() ? "پروکسی شخصی پاسخ نداد" : "سرور Gemini هر ۳ تلاش را بی‌پاسخ گذاشت", detail: `key=${maskKey(apiKey)} host=${safeHost(geminiBase())}` });
+    return { ok: false, text: usingProxy() ? PROXY_NET_FAIL_MSG : GEMINI_NET_FAIL_MSG, network: true };
+  }
 
   // خطای مربوط به «کلید» → کلید بعدی امتحان می‌شود (چند کلید: v2.15)
   const keyError = r.status === 401 || r.status === 403 || r.status === 429 || (r.status === 400 && r.text.includes("کلید"));
@@ -457,16 +517,37 @@ export async function callGemini(opts: {
 }): Promise<GeminiCallResult> {
   const keys = splitApiKeys(opts.apiKey);
   if (keys.length === 0) return { ok: false, text: "اول کلید Gemini را در تنظیمات وارد و ذخیره کنید." };
+  pushGeminiLog({
+    level: "info",
+    phase: "system",
+    msg: `درخواست جدید گفتگو — ${keys.length.toLocaleString("fa-IR", { useGrouping: false })} کلید`,
+    detail: usingProxy() ? `proxy=${safeHost(geminiBase())}` : "proxy=off (مستقیم به گوگل)",
+  });
   let lastKeyError = "";
-  for (const key of keys) {
+  for (let i = 0; i < keys.length; i++) {
+    const key = keys[i];
+    if (keys.length > 1) {
+      pushGeminiLog({ level: "info", phase: "key", msg: `کلید ${(i + 1).toLocaleString("fa-IR", { useGrouping: false })} از ${keys.length.toLocaleString("fa-IR", { useGrouping: false })} امتحان می‌شود`, detail: `key=${maskKey(key)}` });
+    }
     const r = await tryWithKey(key, opts);
-    if (r.ok) return { ok: true, text: r.text };
-    if (r.network) return { ok: false, text: r.text }; // قطعی شبکه/پروکسی — کلید دیگر کمک نمی‌کند
+    if (r.ok) {
+      pushGeminiLog({ level: "ok", phase: "system", msg: "درخواست گفتگو با موفقیت انجام شد" });
+      return { ok: true, text: r.text };
+    }
+    if (r.network) {
+      pushGeminiLog({ level: "error", phase: "system", msg: "درخواست به علت قطع شبکه/پروکسی متوقف شد — کلید دیگر هم کمکی نمی‌کند" });
+      return { ok: false, text: r.text }; // قطعی شبکه/پروکسی — کلید دیگر کمک نمی‌کند
+    }
     if (r.keyError) {
       lastKeyError = r.text;
+      if (i < keys.length - 1) {
+        pushGeminiLog({ level: "warn", phase: "key", msg: `کلید ${(i + 1).toLocaleString("fa-IR", { useGrouping: false })} خطا داد — رفتن به کلید بعدی`, detail: `key=${maskKey(key)}` });
+      }
       continue; // کلید بعدی
     }
+    pushGeminiLog({ level: "error", phase: "system", msg: "درخواست گفتگو ناموفق بود" });
     return { ok: false, text: r.text }; // خطای دیگر (مسدودسازی/پاسخ خالی/...) — گزارش می‌شود
   }
+  pushGeminiLog({ level: "error", phase: "key", msg: "هیچ‌کدام از کلیدها پاسخ نداد", detail: `keys=${keys.length}` });
   return { ok: false, text: lastKeyError || "هیچ‌کدام از کلیدهای Gemini پاسخ نداد — از «تست اتصال» در تنظیمات وضعیت را ببینید." };
 }
