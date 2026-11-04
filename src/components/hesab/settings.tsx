@@ -22,7 +22,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Sun, Moon, Monitor, Coins, Info, SunMoon, RefreshCw, Download, CheckCircle2, AlertTriangle, ExternalLink, Wand2, Plus, Pencil, Trash2, Sparkles, BellRing, Volume2, ShieldCheck } from "lucide-react";
+import { Sun, Moon, Monitor, Coins, Info, SunMoon, RefreshCw, Download, CheckCircle2, AlertTriangle, ExternalLink, Wand2, Plus, Pencil, Trash2, Sparkles, BellRing, Volume2, ShieldCheck, Loader2 } from "lucide-react";
 import { Backup } from "@/components/hesab/backup";
 import {
   currencyLabel,
@@ -45,10 +45,11 @@ import {
   type ReleaseInfo,
 } from "@/lib/app-update";
 import { openExternalUrl } from "@/lib/native-sms";
+import { testGeminiConnection, cachedGeminiModel, resetGeminiModelCache } from "@/lib/ai/gemini";
 import { checkNotifPermission, requestNotifPermission, syncInstallmentNotifications, fireTestNotification, notifSupported } from "@/lib/notifications";
 import type { AppSettings, NotifSettings } from "@/lib/client-api";
 
-const APP_VERSION = "۲.۱۴.۱";
+const APP_VERSION = "۲.۱۴.۲";
 
 function ThemeSection() {
   const { theme, setTheme } = useTheme();
@@ -571,7 +572,7 @@ function AutoCatSection() {
   );
 }
 
-// ─── دستیار هوشمند (Gemini) — v2.14 ───
+// ─── دستیار هوشمند (Gemini) — v2.14، فعال/غیرفعال + تست اتصال از v2.14.2 ───
 
 function AiSection() {
   const qc = useQueryClient();
@@ -582,10 +583,21 @@ function AiSection() {
   });
   const [keyInput, setKeyInput] = useState<string | null>(null);
   const [showKey, setShowKey] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testMsg, setTestMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  const [activeModel, setActiveModel] = useState<string | null>(null);
+
+  useEffect(() => {
+    setActiveModel(cachedGeminiModel());
+  }, []);
 
   const save = useMutation({
     mutationFn: (geminiApiKey: string | null) => api.put("/api/settings", { geminiApiKey }),
     onSuccess: () => {
+      // کلید عوض شد — مدل کش‌شدهٔ قبلی ممکن است برای کلید جدید معتبر نباشد
+      resetGeminiModelCache();
+      setActiveModel(null);
+      setTestMsg(null);
       qc.invalidateQueries({ queryKey: ["app-settings"] });
       setKeyInput(null);
       toast({ title: "کلید ذخیره شد", description: "گوی هوشمند حالا فعال است — روی گوی سبز بزن" });
@@ -593,8 +605,33 @@ function AiSection() {
     onError: (e: Error) => toast({ title: "خطا", description: e.message, variant: "destructive" }),
   });
 
+  const saveAi = useMutation({
+    mutationFn: (patch: { aiEnabled?: boolean; speakReplies?: boolean }) => api.put("/api/settings", { ai: patch }),
+    onSuccess: () => qc.invalidateQueries({ queryKey: ["app-settings"] }),
+    onError: (e: Error) => toast({ title: "خطا", description: e.message, variant: "destructive" }),
+  });
+
+  const runTest = async () => {
+    const key = (keyInput !== null ? keyInput : saved).trim();
+    if (!key) {
+      toast({ title: "اول کلید را وارد کنید", variant: "destructive" });
+      return;
+    }
+    setTesting(true);
+    setTestMsg(null);
+    try {
+      const res = await testGeminiConnection(key);
+      setTestMsg({ ok: res.ok, text: res.message });
+      if (res.ok) setActiveModel(res.model);
+    } finally {
+      setTesting(false);
+    }
+  };
+
   const saved = settings?.geminiApiKey || "";
   const shown = keyInput !== null ? keyInput : saved;
+  const ai = settings?.ai;
+  const aiEnabled = ai ? ai.aiEnabled !== false : true;
 
   return (
     <Card>
@@ -605,6 +642,35 @@ function AiSection() {
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-3">
+        {/* فعال / غیرفعال — از v2.14.2 در تنظیمات */}
+        <label className="flex items-center justify-between gap-3 rounded-xl border p-3">
+          <span className="min-w-0">
+            <span className="block text-sm font-medium">فعال بودن دستیار هوشمند</span>
+            <span className="mt-0.5 block text-[11px] leading-5 text-muted-foreground">
+              خاموش کنید تا گوی سبز شناور روی صفحه نشان داده نشود
+            </span>
+          </span>
+          <Switch
+            checked={aiEnabled}
+            onCheckedChange={(v) => saveAi.mutate({ aiEnabled: v })}
+            disabled={saveAi.isPending}
+            className="shrink-0"
+          />
+        </label>
+        <label className="flex items-center justify-between gap-3 rounded-xl border p-3">
+          <span className="min-w-0">
+            <span className="block text-sm font-medium">خواندن پاسخ با صدا</span>
+            <span className="mt-0.5 block text-[11px] leading-5 text-muted-foreground">
+              پاسخ دستیار بلند خوانده شود (داخل گفتگو هم می‌توانید عوض کنید)
+            </span>
+          </span>
+          <Switch
+            checked={ai ? Boolean(ai.speakReplies) : false}
+            onCheckedChange={(v) => saveAi.mutate({ speakReplies: v })}
+            disabled={saveAi.isPending}
+            className="shrink-0"
+          />
+        </label>
         <p className="text-xs leading-5 text-muted-foreground">
           گوی سبز شناور روی صفحه دستیار گفتگوی شماست: دستور بده — مثل «مبالغ بین ۱۰۰ تا ۵۰۰ هزار تومان رو ببر تو
           هزینه‌های جاری» — تا خودش انجام بدهد. برای فعال‌سازی، کلید رایگان Gemini لازم است.
@@ -631,6 +697,10 @@ function AiSection() {
           >
             ذخیره کلید
           </Button>
+          <Button variant="outline" size="sm" disabled={testing} onClick={() => void runTest()}>
+            {testing ? <Loader2 className="ml-1 h-4 w-4 animate-spin" /> : <RefreshCw className="ml-1 h-4 w-4" />}
+            تست اتصال
+          </Button>
           {saved && (
             <Button variant="outline" size="sm" onClick={() => save.mutate(null)} disabled={save.isPending}>
               حذف کلید
@@ -642,6 +712,22 @@ function AiSection() {
             </span>
           )}
         </div>
+        {testMsg && (
+          <p
+            className={`rounded-lg p-2.5 text-[11px] leading-5 ${
+              testMsg.ok
+                ? "bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+                : "bg-red-50 text-red-700 dark:bg-red-950/40 dark:text-red-300"
+            }`}
+          >
+            {testMsg.text}
+          </p>
+        )}
+        {activeModel && (
+          <p className="text-[11px] text-muted-foreground" dir="ltr">
+            مدل فعال روی این دستگاه: <span className="font-mono">{activeModel}</span>
+          </p>
+        )}
         <button
           type="button"
           onClick={() => void openExternalUrl("https://aistudio.google.com/apikey")}
@@ -652,7 +738,8 @@ function AiSection() {
         </button>
         <p className="rounded-lg bg-muted/60 p-2.5 text-[11px] leading-5 text-muted-foreground">
           امنیت: کلید فقط روی خود دستگاه ذخیره می‌شود. برای پاسخ به دستورها، متن درخواست به سرور Gemini
-          گوگل می‌رود؛ داده‌های حساس شما (شماره‌ها و جزئیات) خارج نمی‌شوند.
+          گوگل می‌رود؛ داده‌های حساس شما (شماره‌ها و جزئیات) خارج نمی‌شوند. اگر «مدل پیدا نشد» دیدید،
+          دکمهٔ تست اتصال خودش بهترین مدل فعالِ کلید شما را پیدا و ذخیره می‌کند.
         </p>
       </CardContent>
     </Card>

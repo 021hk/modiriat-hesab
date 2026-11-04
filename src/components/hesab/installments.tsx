@@ -37,9 +37,18 @@ import {
   AlertTriangle,
   Check,
   RotateCcw,
+  Landmark,
 } from "lucide-react";
 import { api, type Installment, type BankAccount, type Stats, type NotifSettings } from "@/lib/client-api";
 import { JalaliDateTimePicker } from "@/components/hesab/jalali-picker";
+import {
+  PLAN_RATE_TYPES,
+  PLAN_RATE_LABEL,
+  PLAN_RATE_HINT,
+  computeInstallmentAmounts,
+  planSummary,
+  type PlanRateType,
+} from "@/lib/installment-plan";
 import {
   formatMoneyPlain,
   formatMoneyU,
@@ -208,6 +217,211 @@ function InstallmentDialog({
   );
 }
 
+// ─── قسط‌بندی وام (v2.14.2) — N قسط با نرخ نزولی/ثابت/سعودی + سررسید خودکار شمسی ───
+
+function PlanDialog({ accounts, onClose }: { accounts: BankAccount[]; onClose: () => void }) {
+  const qc = useQueryClient();
+  const { toast } = useToast();
+  const [title, setTitle] = useState("");
+  const [principal, setPrincipal] = useState("");
+  const [count, setCount] = useState("");
+  const [rate, setRate] = useState("");
+  const [rateType, setRateType] = useState<PlanRateType>("nozoli");
+  const [firstDue, setFirstDue] = useState(new Date(Date.now() + 30 * 864e5).toISOString());
+  const [counterparty, setCounterparty] = useState("");
+  const [bankAccountId, setBankAccountId] = useState("none");
+
+  const principalRial = toStoredAmount(parseMoneyInput(principal));
+  const countNum = Math.floor(parseMoneyInput(count)); // ارقام فارسی هم قبول است
+  const rateNum = parseMoneyInput(rate) || 0;
+
+  const amounts = useMemo(
+    () =>
+      principalRial > 0 && countNum >= 1 && countNum <= 120
+        ? computeInstallmentAmounts(principalRial, countNum, rateNum, rateType)
+        : [],
+    [principalRial, countNum, rateNum, rateType]
+  );
+  const summary = useMemo(
+    () => (amounts.length > 0 ? planSummary(amounts, principalRial) : null),
+    [amounts, principalRial]
+  );
+
+  const mutation = useMutation({
+    mutationFn: () =>
+      api.post<{ created: number; totalPayable: number; totalInterest: number }>("/api/installments/plan", {
+        title: title.trim(),
+        principal: principalRial,
+        count: countNum,
+        annualRate: rateNum,
+        rateType,
+        firstDueDate: firstDue,
+        counterparty: counterparty || null,
+        bankAccountId: bankAccountId === "none" ? null : bankAccountId,
+      }),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["installments"] });
+      qc.invalidateQueries({ queryKey: ["stats"] });
+      void syncInstallmentNotifications();
+      toast({
+        title: `${res.created.toLocaleString("fa-IR", { useGrouping: false })} قسط ساخته شد ✓`,
+        description: "یادآور اعلان سررسیدها هم فعال شد",
+      });
+      onClose();
+    },
+    onError: (e: Error) => toast({ title: "خطا", description: e.message, variant: "destructive" }),
+  });
+
+  const canSave = title.trim().length > 0 && amounts.length > 0 && !mutation.isPending;
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-md" dir="rtl">
+        <DialogHeader>
+          <DialogTitle className="flex items-center gap-2">
+            <Landmark className="h-4 w-4 text-emerald-700 dark:text-emerald-400" />
+            قسط‌بندی وام
+          </DialogTitle>
+        </DialogHeader>
+        <div className="grid gap-4 py-1">
+          <div className="grid gap-2">
+            <Label>عنوان طرح</Label>
+            <Input placeholder="مثلاً وام مسکن بانک مسکن" value={title} onChange={(e) => setTitle(e.target.value)} />
+          </div>
+
+          <div className="grid gap-2">
+            <Label>مبلغ اصل وام ({currencyLabel()})</Label>
+            <Input
+              inputMode="numeric"
+              dir="ltr"
+              className="text-left text-lg font-bold tabular-nums-persian"
+              placeholder="۳۰۰٬۰۰۰٬۰۰۰"
+              value={principal ? formatMoneyPlain(parseMoneyInput(principal)) : ""}
+              onChange={(e) => setPrincipal(e.target.value)}
+            />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div className="grid gap-2">
+              <Label>تعداد اقساط</Label>
+              <Input
+                inputMode="numeric"
+                dir="ltr"
+                className="text-left font-bold tabular-nums-persian"
+                placeholder="۳۵"
+                value={count}
+                onChange={(e) => setCount(e.target.value)}
+              />
+            </div>
+            <div className="grid gap-2">
+              <Label>نرخ سود سالانه (٪) — اختیاری</Label>
+              <Input
+                inputMode="decimal"
+                dir="ltr"
+                className="text-left font-bold tabular-nums-persian"
+                placeholder="۲۳"
+                value={rate}
+                onChange={(e) => setRate(e.target.value)}
+              />
+            </div>
+          </div>
+
+          <div className="grid gap-2">
+            <Label>نوع نرخ</Label>
+            <div className="grid gap-1.5">
+              {PLAN_RATE_TYPES.map((t) => (
+                <button
+                  key={t}
+                  type="button"
+                  onClick={() => setRateType(t)}
+                  className={`rounded-xl border-2 p-2.5 text-right transition ${
+                    rateType === t
+                      ? "border-emerald-600 bg-emerald-50 text-emerald-800 dark:bg-emerald-950/40 dark:text-emerald-300"
+                      : "border-border text-muted-foreground"
+                  }`}
+                >
+                  <span className="block text-sm font-medium">{PLAN_RATE_LABEL[t]}</span>
+                  <span className="mt-0.5 block text-[11px] leading-4 opacity-80">{PLAN_RATE_HINT[t]}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div className="grid gap-2">
+            <Label>تاریخ اولین سررسید — روزهای بعد همان روزِ ماه</Label>
+            <JalaliDateTimePicker value={firstDue} onChange={setFirstDue} showTime={false} />
+            <p className="text-[11px] leading-4 text-muted-foreground">
+              مثلاً ۱۵ مهر → بعدی‌ها ۱۵ آبان، ۱۵ آذر و… (اعلان یادآور هر قسط خودکار فعال می‌شود)
+            </p>
+          </div>
+
+          {summary && (
+            <div className="rounded-xl bg-muted/60 p-3 text-xs leading-6">
+              <div className="mb-1 font-bold text-emerald-800 dark:text-emerald-300">پیش‌نمایش جدول اقساط</div>
+              <div className="flex justify-between gap-2">
+                <span>تعداد قسط</span>
+                <b className="tabular-nums-persian">{summary.count.toLocaleString("fa-IR", { useGrouping: false })}</b>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span>قسط اول / آخر</span>
+                <b className="tabular-nums-persian">
+                  {formatMoneyU(summary.first)} / {formatMoneyU(summary.last)}
+                </b>
+              </div>
+              {rateNum > 0 && (
+                <div className="flex justify-between gap-2">
+                  <span>کمترین / بیشترین قسط</span>
+                  <b className="tabular-nums-persian">
+                    {formatMoneyU(summary.min)} / {formatMoneyU(summary.max)}
+                  </b>
+                </div>
+              )}
+              <div className="flex justify-between gap-2">
+                <span>جمع سود</span>
+                <b className="tabular-nums-persian text-amber-700 dark:text-amber-400">{formatMoneyU(summary.totalInterest)}</b>
+              </div>
+              <div className="flex justify-between gap-2">
+                <span>جمع پرداخت (اصل + سود)</span>
+                <b className="tabular-nums-persian">{formatMoneyU(summary.totalPayable)}</b>
+              </div>
+            </div>
+          )}
+
+          <div className="grid gap-2">
+            <Label>بانک / طرف حساب (اختیاری)</Label>
+            <Input placeholder="مثلاً بانک مسکن" value={counterparty || ""} onChange={(e) => setCounterparty(e.target.value)} />
+          </div>
+
+          <div className="grid gap-2">
+            <Label>حساب مرتبط (برای هشدار موجودی و ثبت پرداخت)</Label>
+            <Select value={bankAccountId} onValueChange={setBankAccountId}>
+              <SelectTrigger>
+                <SelectValue placeholder="انتخاب حساب" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">بدون حساب</SelectItem>
+                {accounts.map((a) => (
+                  <SelectItem key={a.id} value={a.id}>
+                    {a.name} — {a.bankName}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
+        </div>
+        <DialogFooter>
+          <Button variant="outline" onClick={onClose}>
+            انصراف
+          </Button>
+          <Button className="bg-emerald-700 hover:bg-emerald-800" disabled={!canSave} onClick={() => mutation.mutate()}>
+            ساخت اقساط
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 // ─── پنجرهٔ پرداخت قسط (+ ثبت همزمان تراکنش هزینه) ───
 
 function PayDialog({
@@ -316,6 +530,20 @@ function InstallmentCard({
     },
     onError: (e: Error) => toast({ title: "خطا", description: e.message, variant: "destructive" }),
   });
+  // حذف کل طرح قسط‌بندی وام — فقط اقساط پرداخت‌نشده (v2.14.2)
+  const delPlan = useMutation({
+    mutationFn: () => api.del<{ deleted: number; keptPaid: number }>(`/api/installments/plan/${inst.planId}`),
+    onSuccess: (res) => {
+      qc.invalidateQueries({ queryKey: ["installments"] });
+      qc.invalidateQueries({ queryKey: ["stats"] });
+      void syncInstallmentNotifications();
+      toast({
+        title: "طرح حذف شد",
+        description: `${res.deleted.toLocaleString("fa-IR", { useGrouping: false })} قسط باقی‌مانده حذف شد${res.keptPaid > 0 ? " — پرداخت‌شده‌ها ماندند" : ""}`,
+      });
+    },
+    onError: (e: Error) => toast({ title: "خطا", description: e.message, variant: "destructive" }),
+  });
 
   const dueMs = new Date(inst.dueDate).getTime();
   const days = daysUntilDue(dueMs, Date.now());
@@ -356,6 +584,11 @@ function InstallmentCard({
               <Badge className={isCheck ? "bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300" : "bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300"}>
                 {kindWord}
               </Badge>
+              {inst.planCount && inst.planIndex ? (
+                <Badge variant="outline" className="border-emerald-300 text-emerald-700 dark:border-emerald-800 dark:text-emerald-300">
+                  قسط {inst.planIndex.toLocaleString("fa-IR", { useGrouping: false })} از {inst.planCount.toLocaleString("fa-IR", { useGrouping: false })}
+                </Badge>
+              ) : null}
               {inst.paid && <Badge className="bg-slate-100 text-slate-600 dark:bg-slate-900 dark:text-slate-400">پرداخت‌شده</Badge>}
               {!inst.paid && days < 0 && <Badge className="bg-red-100 text-red-700 dark:bg-red-950 dark:text-red-300">سررسید گذشته</Badge>}
               {!inst.paid && days >= 0 && days <= 2 && <Badge className="bg-amber-100 text-amber-800 dark:bg-amber-950 dark:text-amber-300">نزدیک</Badge>}
@@ -406,6 +639,19 @@ function InstallmentCard({
           <Button variant="ghost" size="sm" className="text-red-600 hover:text-red-700" onClick={() => del.mutate()} disabled={del.isPending}>
             <Trash2 className="ml-1 h-3.5 w-3.5" /> حذف
           </Button>
+          {inst.planId && !inst.paid && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-red-600 hover:text-red-700"
+              disabled={delPlan.isPending}
+              onClick={() => {
+                if (window.confirm("همهٔ قسط‌های پرداخت‌نشدهٔ این طرح حذف شود؟ (پرداخت‌شده‌ها می‌مانند)")) delPlan.mutate();
+              }}
+            >
+              <Trash2 className="ml-1 h-3.5 w-3.5" /> حذف کل طرح
+            </Button>
+          )}
         </div>
       </CardContent>
     </Card>
@@ -420,6 +666,7 @@ export function Installments() {
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("upcoming");
   const [kindFilter, setKindFilter] = useState<KindFilter>("all");
   const [dialogFor, setDialogFor] = useState<Installment | "new" | null>(null);
+  const [planOpen, setPlanOpen] = useState(false);
   const [payFor, setPayFor] = useState<Installment | null>(null);
 
   const { data: installments, isLoading } = useQuery<Installment[]>({
@@ -543,6 +790,9 @@ export function Installments() {
             {k === "all" ? "قسط و چک" : k === "installment" ? "قسط" : "چک"}
           </button>
         ))}
+        <Button variant="outline" size="sm" onClick={() => setPlanOpen(true)}>
+          <Landmark className="ml-1 h-4 w-4" /> قسط‌بندی وام
+        </Button>
         <Button variant="outline" size="sm" className="mr-auto" onClick={() => setDialogFor("new")}>
           <Plus className="ml-1 h-4 w-4" /> {kindFilter === "check" ? "چک جدید" : "قسط/چک جدید"}
         </Button>
@@ -588,6 +838,7 @@ export function Installments() {
           onClose={() => setDialogFor(null)}
         />
       )}
+      {planOpen && <PlanDialog accounts={accounts || []} onClose={() => setPlanOpen(false)} />}
       {payFor && (
         <PayDialog inst={payFor} accounts={accounts || []} onClose={() => setPayFor(null)} />
       )}

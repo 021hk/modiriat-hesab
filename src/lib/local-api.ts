@@ -15,6 +15,7 @@ import { parseBankSms, type SmsParseResult } from "@/lib/sms-parser";
 import { categoryDepthById, MAX_CATEGORY_DEPTH } from "@/lib/category-tree";
 import { matchAutoCatRule, validateAutoCatRuleInput, type AutoCatRule } from "@/lib/auto-cat";
 import { jalaliMonthBounds } from "@/lib/jalali";
+import { buildPlanRows, PLAN_RATE_TYPES, type PlanRateType } from "@/lib/installment-plan";
 import type {
   Category,
   BankAccount,
@@ -942,6 +943,85 @@ async function deleteInstallment(id: string): Promise<void> {
   await dbDelete(STORES.installments, id);
 }
 
+// ─── قسط‌بندی وام (v2.14.2) — N قسط با نرخ نزولی/ثابت/سعودی + سررسید خودکار شمسی ───
+
+async function createInstallmentPlan(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  const title = typeof body.title === "string" ? body.title.trim() : "";
+  if (!title) fail("عنوان طرح الزامی است");
+  const principal = num(body.principal);
+  if (!(principal > 0)) fail("مبلغ اصل وام باید بزرگ‌تر از صفر باشد");
+  const count = Math.floor(num(body.count));
+  if (!(count >= 1) || count > 120) fail("تعداد اقساط باید بین ۱ تا ۱۲۰ باشد");
+  const annualRate = Math.max(0, num(body.annualRate) || 0);
+  if (annualRate > 200) fail("نرخ سود سالانه حداکثر ۲۰۰٪ است");
+  const rateType: PlanRateType = PLAN_RATE_TYPES.includes(body.rateType as PlanRateType)
+    ? (body.rateType as PlanRateType)
+    : "nozoli";
+  const firstMs = Date.parse(String(body.firstDueDate || ""));
+  if (!Number.isFinite(firstMs)) fail("تاریخ اولین سررسید نامعتبر است");
+  const rows = buildPlanRows({
+    title,
+    principal,
+    count,
+    annualRatePct: annualRate,
+    rateType,
+    firstDueDate: new Date(firstMs).toISOString(),
+  });
+  if (rows.length === 0) fail("ساخت جدول اقساط ناموفق بود");
+  const planId = newId();
+  const now = nowIso();
+  const counterparty = (body.counterparty as string) || null;
+  const bankAccountId = (body.bankAccountId as string) || null;
+  const stored: Installment[] = rows.map((r) => ({
+    id: newId(),
+    title: r.title,
+    kind: "installment",
+    amount: r.amount,
+    dueDate: r.dueDate,
+    counterparty,
+    bankAccountId,
+    paid: false,
+    paidAt: null,
+    notes: null,
+    planId,
+    planIndex: r.index,
+    planCount: rows.length,
+    planRateType: rateType,
+    planPrincipal: Math.round(principal),
+    planAnnualRate: annualRate,
+    createdAt: now,
+    updatedAt: now,
+  }));
+  for (const row of stored) await dbPut(STORES.installments, row);
+  const totalPayable = stored.reduce((s, r) => s + r.amount, 0);
+  return {
+    planId,
+    created: stored.length,
+    totalPayable,
+    totalInterest: Math.max(0, totalPayable - Math.round(principal)),
+    rows: stored,
+  };
+}
+
+/** حذف کل طرح — فقط اقساط پرداخت‌نشده حذف می‌شوند (پرداخت‌شده‌ها بایگانی می‌مانند) */
+async function deletePlanInstallments(planId: string): Promise<{ deleted: number; keptPaid: number }> {
+  if (!planId) fail("شناسهٔ طرح نامعتبر است");
+  const all = await dbGetAll<Installment>(STORES.installments);
+  const rows = all.filter((r) => r.planId === planId);
+  if (rows.length === 0) fail("طرحی با این شناسه پیدا نشد");
+  let deleted = 0;
+  let keptPaid = 0;
+  for (const r of rows) {
+    if (r.paid) {
+      keptPaid++;
+      continue;
+    }
+    await dbDelete(STORES.installments, r.id);
+    deleted++;
+  }
+  return { deleted, keptPaid };
+}
+
 // ─── تنظیمات برنامه (کلید Gemini، اعلان‌ها) — روی خود دستگاه ذخیره می‌شود ───
 
 async function getAppSettings(): Promise<AppSettings> {
@@ -967,6 +1047,7 @@ async function updateAppSettings(body: Record<string, unknown>): Promise<AppSett
     const b = body.ai as Record<string, unknown>;
     await setMeta("aiSettings", {
       ...cur,
+      aiEnabled: b.aiEnabled !== undefined ? Boolean(b.aiEnabled) : cur.aiEnabled,
       apiKey: b.apiKey !== undefined ? (typeof b.apiKey === "string" && b.apiKey.trim() ? b.apiKey.trim() : null) : cur.apiKey,
       speakReplies: b.speakReplies !== undefined ? Boolean(b.speakReplies) : cur.speakReplies,
     } satisfies AiSettings);
@@ -1319,6 +1400,8 @@ export async function localRequest<T>(method: string, url: string, body?: unknow
     };
 
     if (resource === "backup" && m === "POST") handler = table.backup.POST;
+    else if (resource === "installments" && id === "plan" && !sub && m === "POST") handler = (q, b) => createInstallmentPlan(b);
+    else if (resource === "installments" && id === "plan" && sub && m === "DELETE") handler = async () => deletePlanInstallments(sub);
     else if (id && sub === "attachments" && resource === "debts" && m === "POST") {
       handler = (q, b) => createAttachment(id, b);
     } else if (id && sub === "link-debt" && resource === "transactions" && m === "POST") {

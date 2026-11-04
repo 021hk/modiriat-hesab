@@ -410,6 +410,9 @@ export function AiOrb({ onOpenSettings }: { onOpenSettings: () => void }) {
 
   const hasKey = Boolean(settings?.geminiApiKey);
 
+  // دستیار از تنظیمات خاموش شده؟ (v2.14.2) — گوی و پنل نشان داده نمی‌شود
+  if (settings?.ai && settings.ai.aiEnabled === false) return null;
+
   return (
     <>
       {/* گوی شناور */}

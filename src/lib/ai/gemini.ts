@@ -3,9 +3,119 @@
 // مثلاً «مبالغ بین ۱۰۰ تا ۵۰۰ هزار رو ببر تو هزینه‌های جاری» → categorize_by_range
 // همهٔ اقدام‌ها روی دادهٔ محلی خود دستگاه اجرا می‌شوند؛ فقط متن درخواست به Gemini می‌رود.
 
-export const GEMINI_MODEL = "gemini-2.0-flash";
+// چندمدلی (v2.14.2): گوگل مدل‌ها را بازنشسته می‌کند — روی 404 مدل بعدی امتحان می‌شود
+// و مدلی که جواب داد کش می‌شود تا درخواست بعدی مستقیم همان برود.
+export const GEMINI_MODELS = [
+  "gemini-2.0-flash",
+  "gemini-2.5-flash",
+  "gemini-flash-latest",
+  "gemini-2.0-flash-lite",
+  "gemini-2.5-flash-lite",
+  "gemini-1.5-flash",
+] as const;
+
+export const GEMINI_MODEL = GEMINI_MODELS[0]; // پیش‌فرض — برای سازگاری قدیمی
 const GEMINI_URL = (model: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+const GEMINI_LIST_URL = "https://generativelanguage.googleapis.com/v1beta/models";
+const MODEL_CACHE_KEY = "hesab-yar:gemini-model";
+
+function readCachedModel(): string | null {
+  try {
+    return localStorage.getItem(MODEL_CACHE_KEY);
+  } catch {
+    return null;
+  }
+}
+
+function writeCachedModel(model: string | null): void {
+  try {
+    if (model) localStorage.setItem(MODEL_CACHE_KEY, model);
+    else localStorage.removeItem(MODEL_CACHE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+export interface GeminiModelInfo {
+  name: string; // مثلاً "models/gemini-2.0-flash" یا "gemini-2.0-flash"
+  supportsGenerate: boolean;
+}
+
+/** پاسخ GET /v1beta/models → فهرست مدل‌های قابل‌استفاده — خالص و قابل‌تست */
+export function parseModelsList(json: unknown): GeminiModelInfo[] {
+  const models = (json as { models?: { name?: string; supportedGenerationMethods?: string[] }[] })?.models;
+  if (!Array.isArray(models)) return [];
+  return models
+    .filter((m) => typeof m?.name === "string")
+    .map((m) => ({
+      name: m.name!.replace(/^models\//, ""),
+      supportsGenerate: Array.isArray(m.supportedGenerationMethods)
+        ? m.supportedGenerationMethods.includes("generateContent")
+        : true,
+    }));
+}
+
+/** از فهرست مدل‌های موجود، بهترین مدل flash را انتخاب می‌کند — خالص و قابل‌تست */
+export function pickGeminiModel(available: GeminiModelInfo[]): string | null {
+  const usable = available.filter((m) => m.supportsGenerate).map((m) => m.name);
+  if (usable.length === 0) return null;
+  for (const pref of GEMINI_MODELS) if (usable.includes(pref)) return pref;
+  const flash = usable.find((n) => n.includes("flash"));
+  if (flash) return flash;
+  return usable[0];
+}
+
+/** مدل روی این دستگاه که در تماس قبلی جواب داده */
+export function cachedGeminiModel(): string | null {
+  return readCachedModel();
+}
+
+/** پاک کردن مدل کش‌شده — بعد از تغییر کلید یا خطای 404 */
+export function resetGeminiModelCache(): void {
+  writeCachedModel(null);
+}
+
+/**
+ * فهرست مدل‌های مجاز این کلید را از گوگل می‌گیرد — برای «تست اتصال» و انتخاب خودکار مدل.
+ */
+export async function listGeminiModels(apiKey: string): Promise<{ ok: boolean; models: GeminiModelInfo[]; message: string }> {
+  let res: Response;
+  try {
+    res = await fetch(GEMINI_LIST_URL, { headers: { "x-goog-api-key": apiKey } });
+  } catch {
+    return { ok: false, models: [], message: "اتصال اینترنت برقرار نشد — برای دستیار هوشمند به اینترنت (و در ایران معمولاً VPN) نیاز است." };
+  }
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    return { ok: false, models: [], message: geminiErrorToPersian(res.status, t) };
+  }
+  try {
+    const models = parseModelsList(await res.json());
+    if (models.length === 0) return { ok: false, models: [], message: "هیچ مدلی برای این کلید در دسترس نیست — کلید جدیدی از aistudio.google.com/apikey بگیرید." };
+    return { ok: true, models, message: "اتصال موفق" };
+  } catch {
+    return { ok: false, models: [], message: "پاسخ Gemini قابل خواندن نبود — دوباره امتحان کنید." };
+  }
+}
+
+export interface GeminiTestResult {
+  ok: boolean;
+  model: string | null; // مدل انتخاب‌شده (در صورت موفقیت) — کش هم می‌شود
+  message: string; // پیام فارسی برای نمایش
+}
+
+/** دکمه «تست اتصال» تنظیمات — کلید را می‌آزماید و مدل مناسب را پیدا و کش می‌کند */
+export async function testGeminiConnection(apiKey: string): Promise<GeminiTestResult> {
+  const key = String(apiKey || "").trim();
+  if (!key) return { ok: false, model: null, message: "اول کلید Gemini را وارد و ذخیره کنید." };
+  const res = await listGeminiModels(key);
+  if (!res.ok) return { ok: false, model: null, message: res.message };
+  const model = pickGeminiModel(res.models);
+  if (!model) return { ok: false, model: null, message: "هیچ مدلی با این کلید قابل استفاده نیست — کلید جدیدی بگیرید." };
+  writeCachedModel(model);
+  return { ok: true, model, message: `اتصال موفق است ✓ — مدل «${model}» آماده گفتگو است.` };
+}
 
 export interface AiChatMessage {
   role: "user" | "model";
@@ -97,7 +207,7 @@ export function geminiErrorToPersian(status: number, body: string): string {
   if (status === 400 && /API[_ ]?key|API_KEY_INVALID/i.test(b)) return "کلید Gemini نامعتبر است — از تنظیمات کلید درست را وارد کنید.";
   if (status === 401 || status === 403) return "دسترسی به Gemini رد شد — کلید API را در تنظیمات بررسی کنید.";
   if (status === 429) return "تعداد درخواست‌های Gemini زیاد شده — چند لحظه بعد دوباره امتحان کنید.";
-  if (status === 404) return "مدل Gemini پیدا نشد — ممکن است نام مدل تغییر کرده باشد.";
+  if (status === 404) return "مدل Gemini در دسترس نیست — برنامه خودش مدل دیگری را امتحان می‌کند؛ اگر ادامه داشت، از دکمهٔ «تست اتصال» در تنظیمات مدل فعال را پیدا کنید.";
   if (status >= 500) return "سرور Gemini فعلاً در دسترس نیست — کمی بعد دوباره امتحان کنید.";
   return "خطا در ارتباط با Gemini" + (status ? ` (کد ${status})` : "");
 }
@@ -107,7 +217,12 @@ export interface GeminiCallResult {
   text: string; // پاسخ خام مدل یا پیام خطا
 }
 
-/** فراخوانی Gemini — فقط متن درخواست و زمینهٔ خلاصه می‌رود؛ هیچ دادهٔ حساسی خارج نمی‌شود */
+/**
+ * فراخوانی generateContent با جای‌گردی مدل (v2.14.2):
+ * ۱) اول مدل کش‌شدهٔ دستگاه یا پیش‌فرض؛ ۲) روی خطای 404 («مدل پیدا نشد») کش پاک و
+ * فهرست واقعی مدل‌های کلید خوانده و بهترین مدل انتخاب می‌شود؛ ۳) اگر فهرست هم نشد،
+ * لیست ثابت یکی‌یکی امتحان می‌شود. مدل موفق کش می‌شود تا تماس بعدی مستقیم برود.
+ */
 export async function callGemini(opts: {
   apiKey: string;
   systemPrompt: string;
@@ -122,36 +237,69 @@ export async function callGemini(opts: {
       responseMimeType: "application/json",
     },
   };
-  let res: Response;
-  try {
-    res = await fetch(GEMINI_URL(GEMINI_MODEL), {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "x-goog-api-key": opts.apiKey,
-      },
-      body: JSON.stringify(body),
-    });
-  } catch {
-    return { ok: false, text: "اتصال اینترنت برقرار نشد — برای دستیار هوشمند به اینترنت نیاز است." };
-  }
-  if (!res.ok) {
-    const t = await res.text().catch(() => "");
-    return { ok: false, text: geminiErrorToPersian(res.status, t) };
-  }
-  try {
-    const json = (await res.json()) as {
-      candidates?: { content?: { parts?: { text?: string }[] } }[];
-      promptFeedback?: { blockReason?: string };
-    };
-    const parts = json.candidates?.[0]?.content?.parts || [];
-    const text = parts.map((p) => p.text || "").join("").trim();
-    if (!text) {
-      const blocked = json.promptFeedback?.blockReason;
-      return { ok: false, text: blocked ? `درخواست توسط Gemini مسدود شد (${blocked})` : "پاسخی از Gemini نرسید — دوباره امتحان کنید." };
+  const doCall = async (model: string): Promise<{ status: number; ok: boolean; text: string } | null> => {
+    try {
+      const res = await fetch(GEMINI_URL(model), {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "x-goog-api-key": opts.apiKey },
+        body: JSON.stringify(body),
+      });
+      if (res.ok) {
+        const json = (await res.json()) as {
+          candidates?: { content?: { parts?: { text?: string }[] } }[];
+          promptFeedback?: { blockReason?: string };
+        };
+        const parts = json.candidates?.[0]?.content?.parts || [];
+        const text = parts.map((p) => p.text || "").join("").trim();
+        if (!text) {
+          const blocked = json.promptFeedback?.blockReason;
+          return { status: res.status, ok: false, text: blocked ? `درخواست توسط Gemini مسدود شد (${blocked})` : "پاسخی از Gemini نرسید — دوباره امتحان کنید." };
+        }
+        return { status: res.status, ok: true, text };
+      }
+      const t = await res.text().catch(() => "");
+      return { status: res.status, ok: false, text: geminiErrorToPersian(res.status, t) };
+    } catch {
+      return null; // خطای شبکه — بیرون گزارش می‌شود
     }
-    return { ok: true, text };
-  } catch {
-    return { ok: false, text: "پاسخ Gemini قابل خواندن نبود — دوباره امتحان کنید." };
+  };
+
+  // ۱) مدل کش‌شده یا پیش‌فرض
+  const first = readCachedModel() || GEMINI_MODEL;
+  let r = await doCall(first);
+  if (r?.ok) {
+    writeCachedModel(first);
+    return { ok: true, text: r.text };
   }
+  if (r === null) return { ok: false, text: "اتصال اینترنت برقرار نشد — برای دستیار هوشمند به اینترنت نیاز است." };
+
+  // ۲) فقط 404 یعنی «مدل نیست» → بقیهٔ خطاها مستقیم گزارش می‌شوند (کلید/سقف/...)
+  if (r.status !== 404) return { ok: false, text: r.text };
+  writeCachedModel(null);
+
+  // ۳) فهرست واقعی مدل‌های مجاز این کلید
+  const listed = await listGeminiModels(opts.apiKey);
+  if (listed.ok) {
+    const pick = pickGeminiModel(listed.models);
+    if (pick && pick !== first) {
+      const r2 = await doCall(pick);
+      if (r2?.ok) {
+        writeCachedModel(pick);
+        return { ok: true, text: r2.text };
+      }
+      if (r2 && r2.status !== 404) return { ok: false, text: r2.text };
+    }
+  }
+
+  // ۴) لیست ثابت — هر مدلی که 404 نداد
+  for (const m of GEMINI_MODELS) {
+    if (m === first) continue;
+    const r3 = await doCall(m);
+    if (r3?.ok) {
+      writeCachedModel(m);
+      return { ok: true, text: r3.text };
+    }
+    if (r3 && r3.status !== 404) return { ok: false, text: r3.text };
+  }
+  return { ok: false, text: "هیچ مدل Gemini با این کلید پاسخ نداد — از دکمهٔ «تست اتصال» در تنظیمات وضعیت کلید و مدل‌های فعال را ببینید." };
 }

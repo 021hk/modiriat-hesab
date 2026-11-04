@@ -92,6 +92,7 @@ export interface SmsLog {
 
 // قانون دسته‌بندی خودکار با مبلغ (v2.13) — مبلغ‌ها به ریال ذخیره می‌شوند
 export type InstallmentKind = "installment" | "check"; // قسط | چک
+export type { PlanRateType } from "@/lib/installment-plan";
 
 /** اقساط و چک‌ها (v2.14) — سررسید + هشدار اعلان ۲ روز قبل + هشدار قرمز کمبود موجودی */
 export interface Installment {
@@ -106,6 +107,13 @@ export interface Installment {
   paid: boolean;
   paidAt?: string | null;
   notes?: string | null;
+  // طرح قسط‌بندی وام (v2.14.2) — اگر این ردیف با «قسط‌بندی وام» ساخته شده باشد پر می‌شود
+  planId?: string | null; // شناسهٔ طرح — همهٔ اقساط یک وام یکسان
+  planIndex?: number | null; // قسط چندم (۱ تا planCount)
+  planCount?: number | null; // از چند قسط
+  planRateType?: "nozoli" | "sabet" | "soudi" | null; // نوع نرخ طرح
+  planPrincipal?: number | null; // اصل وام طرح (ریال)
+  planAnnualRate?: number | null; // نرخ سود سالانهٔ طرح (٪)
   createdAt: string;
   updatedAt: string;
 }
@@ -120,6 +128,7 @@ export interface NotifSettings {
 
 /** تنظیمات دستیار هوشمند (Gemini) */
 export interface AiSettings {
+  aiEnabled: boolean; // گوی و دستیار هوشمند روشن باشد؟ (v2.14.2 — تنظیم از تب تنظیمات)
   apiKey: string | null; // کلید Gemini — در خود دستگاه ذخیره می‌شود
   speakReplies: boolean; // پاسخ با صدا خوانده شود؟ (حالت گفتمان)
 }
@@ -138,6 +147,7 @@ export const DEFAULT_NOTIF_SETTINGS: NotifSettings = {
 };
 
 export const DEFAULT_AI_SETTINGS: AiSettings = {
+  aiEnabled: true,
   apiKey: null,
   speakReplies: false,
 };
