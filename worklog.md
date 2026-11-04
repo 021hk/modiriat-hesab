@@ -354,3 +354,20 @@ Work Log:
 - کشف تستی: re-arm هم‌زمان با پیمایش history باعث دابل-برگشت در Playwright می‌شد → re-arm با setTimeout(0) بعد از settled شدن پیمایش
 - تأیید مرورگری scripts/verify-back.sh (۱۲ سناریو سبز): داشبورد→تنظیمات→تراکنش→برگشت→تنظیمات→برگشت→داشبورد؛ برگشت = بستن دیالوگ تراکنش بدون تعویض تب؛ برگشت = بستن پنل گوی؛ URL همیشه داخل برنامه؛ صفر خطای کنسول
 - نسخه‌ها: package.json 2.14.1 / versionCode 19 / versionName 2.14.1 / SW v20 (gen-sw هم v20) / فوتر و تنظیمات ۲.۱۴.۱
+
+---
+Task ID: 23
+Agent: Main Agent (Super Z)
+Task: v2.14.2 — درخواست کاربر: «مدل جمنای پیدا نشد» + انتقال فعال/غیرفعال دستیار به تنظیمات + قسط‌بندی وام (N قسط با نرخ ثابت/نزولی/سعودی + سررسید خودکار شمسی و اعلان)
+
+Work Log:
+- تشخیص: خطای 404 یعنی درخواست به گوگل رسیده (VPN سالم) ولی مدل gemini-2.0-flash برای آن کلید در دسترس نبود؛ راه‌حل چندمدلی به‌جای یک اسم ثابت
+- lib/ai/gemini.ts: GEMINI_MODELS (6 مدل flash) + parseModelsList/pickGeminiModel خالص (GET /v1beta/models با x-goog-api-key، فیلتر generateContent، ترجیح لیست ثابت بعد هر flash) + کش مدل روی دستگاه (localStorage hesab-yar:gemini-model) + callGemini با جای‌گردی: مدل کش/پیش‌فرض → روی 404 فهرست واقعی کلید → لیست ثابت؛ خطای غیر404 (کلید/429/500) مستقیم گزارش می‌شود؛ testGeminiConnection برای دکمهٔ تست اتصال؛ پیام 404 فارسی به «تست اتصال» ارجاع می‌دهد
+- settings.tsx کارت دستیار: سوییچ «فعال بودن دستیار هوشمند» (ai.aiEnabled — گوی مخفی می‌شود) + سوییچ «خواندن پاسخ با صدا» + دکمهٔ «تست اتصال» با نتیجهٔ رنگی + نمایش مدل فعال؛ ai-orb.tsx وقتی aiEnabled===false باشد null برمی‌گرداند؛ local-api updateAppSettings فیلد aiEnabled را می‌خواند؛ client-api AiSettings+DEFAULT با aiEnabled:true
+- lib/installment-plan.ts خالص: computeInstallmentAmounts (نزولی = اصل/N + سود مانده؛ ثابت = اصل/N + اصل×نرخ‌ماهانه؛ سعودی = آینهٔ نزولی با همان جمع؛ گردکردن با جبران روی قسط آخر) + jalaliMonthAdd (همان روز ماه، clamp به طول ماه هدف) + buildPlanRows (عنوان «قسط ۳ از ۳۵» با ارقام فارسی) + planSummary
+- local-api: POST /api/installments/plan (اعتبارسنجی عنوان/اصل/تعداد ۱..۱۲۰/نرخ ≤۲۰۰٪/تاریخ) → N ردیف Installment با planId/planIndex/planCount/planRateType/planPrincipal/planAnnualRate + DELETE /api/installments/plan/:planId (فقط پرداخت‌نشده، برگشت {deleted,keptPaid}) — پشتیبان‌گیری چون ...inst را spread می‌کند فیلدهای طرح را نگه می‌دارد
+- installments.tsx: دکمهٔ «قسط‌بندی وام» + PlanDialog (اصل/تعداد/نرخ + سه دکمهٔ نوع نرخ با توضیح + تاریخ اولین سررسید جلالی + پیش‌نمایش زندهٔ تعداد/اول-آخر/کمترین-بیشترین/جمع سود/جمع پرداخت) + نشان «قسط ۳ از ۳۵» روی کارت + «حذف کل طرح» با window.confirm؛ اعلان‌ها با همان syncInstallmentNotifications خودکار (سقف ۴۰ اعلان نزدیک‌ترین‌ها)
+- تست‌ها: test-installment-plan.ts (۴۴) + test-gemini-models.ts (۱۸) → مجموع ۴۷۰/۴۷۰ سبز؛ دو خطای خودِ تست اصلاح شد (۱٪ از ۱۲M = ۱۲۰هزار؛ ۳۰ اسفند+۱ماه = ۳۰ فروردین بدون clamp)
+- محیط: bun run build محلی روی /api/attachments/[id] گیر می‌داد (src/app/api در .gitignore است و CI هرگز نمی‌بیندش — بقایای Prisma) → منتقل به _legacy/server-api-ref و .gitignore به _legacy/ تغییر کرد؛ بعدش build سبز
+- دود-تست مرورگری (agent-browser): دیالوگ قسط‌بندی رندر ✓ پیش‌نمایش (۳۵ قسط، اول ۱۴٬۳۲۱٬۴۲۹ / آخر ۸٬۷۳۵٬۷۱۴، سود ۱۰۳٬۵۰۰٬۰۰۰ = دقیق) ✓ ثبت → ۳۵ کارت «وام آزمایشی (قسط ۱..۳۵ از ۳۵)» ✓ سررسیدها همه روز ۱۳ شمسی متوالی با پرش سال (۱۳ آذر ۱۴۰۵→۱۳ فروردین ۱۴۰۶) ✓ حذف کل طرح → صفر ✓ تنظیمات: هر دو سوییچ ✓ خاموش → گوی مخفی، روشن → برگشت + دکمهٔ تست اتصال ✓
+- نسخه‌ها: package.json 2.14.2 / versionCode 20 / versionName 2.14.2 / SW v21 (gen-sw هم v21) / فوتر و تنظیمات ۲.۱۴.۲
