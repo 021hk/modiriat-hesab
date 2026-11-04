@@ -8,8 +8,11 @@ import {
   GEMINI_NET_FAIL_MSG,
   listGeminiModels,
   networkFailMessage,
+  normalizeProxyUrl,
   probeGoogleReachable,
   resetGeminiModelCache,
+  splitApiKeys,
+  PROXY_NET_FAIL_MSG,
   type AiChatMessage,
 } from "../src/lib/ai/gemini";
 
@@ -62,7 +65,7 @@ let netCalls = 0;
 }) as typeof fetch;
 
 {
-  const r = await callGemini({ apiKey: "k", systemPrompt: "s", history: HIST });
+  const r = await callGemini({ apiKey: "KEYTEST0000000", systemPrompt: "s", history: HIST });
   check("شبکه قطع: تعداد تلاش", netCalls, GEMINI_NET_ATTEMPTS);
   check("شبکه قطع: پیام فارسی", r.ok === false && r.text === GEMINI_NET_FAIL_MSG, true);
 }
@@ -79,7 +82,7 @@ let flaky = 0;
 }) as typeof fetch;
 
 {
-  const r = await callGemini({ apiKey: "k", systemPrompt: "s", history: HIST });
+  const r = await callGemini({ apiKey: "KEYTEST0000000", systemPrompt: "s", history: HIST });
   check("قطع موقت: موفق شد", r.ok, true);
   check("قطع موقت: دقیقاً ۳ تلاش", flaky, 3);
 }
@@ -92,13 +95,102 @@ let httpCalls = 0;
 }) as typeof fetch;
 
 {
-  const r = await callGemini({ apiKey: "k", systemPrompt: "s", history: HIST });
+  const r = await callGemini({ apiKey: "KEYTEST0000000", systemPrompt: "s", history: HIST });
   check("429: فقط یک فراخوانی", httpCalls, 1);
   check("429: پیام سقف مصرف", r.ok === false && r.text.includes("زیاد شده"), true);
 }
 
 (globalThis as { fetch: unknown }).fetch = realFetch;
 resetGeminiModelCache();
+
+// ─── چند کلید API (v2.15) ───
+
+// جداسازی کلیدها: خط/ویرگول/فارسی، حذف تکرار، حذف خالی‌ها
+check("کلید: تک کلید", splitApiKeys("AIzaABCDEF1234567890"), ["AIzaABCDEF1234567890"]);
+check("کلید: چندتایی با ویرگول", splitApiKeys("AIzaAAAAAAAAAAAAAA01, AIzaBBBBBBBBBBBBBB02"), ["AIzaAAAAAAAAAAAAAA01", "AIzaBBBBBBBBBBBBBB02"]);
+check("کلید: چندخطی + تکرار", splitApiKeys("AIzaAAAAAAAAAAAAAA01\n\nAIzaBBBBBBBBBBBBBB02\nAIzaAAAAAAAAAAAAAA01؛"), ["AIzaAAAAAAAAAAAAAA01", "AIzaBBBBBBBBBBBBBB02"]);
+check("کلید: خالی", splitApiKeys("   \n ,"), []);
+check("کلید: null", splitApiKeys(null), []);
+check("کلید: رشتهٔ کوتاه حذف", splitApiKeys("abc , AIzaAAAAAAAAAAAAAA01"), ["AIzaAAAAAAAAAAAAAA01"]);
+
+// چرخش کلید: اولی ۴۰۱/۴۰۰ نامعتبر → دومی موفق
+let keyCalls = 0;
+(globalThis as { fetch: unknown }).fetch = (async (_url: string | URL | Request, init?: { headers?: Record<string, string> }) => {
+  keyCalls++;
+  const hdr = init?.headers?.["x-goog-api-key"];
+  if (hdr === "KEY2VALID0000") {
+    return new Response(
+      JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"reply":"با کلید دوم","actions":[]}' }] } }] }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  }
+  return new Response(JSON.stringify({ error: { message: "API key not valid. Please pass a valid API key." } }), { status: 400 });
+}) as typeof fetch;
+{
+  resetGeminiModelCache();
+  const r = await callGemini({ apiKey: "KEY1INVALID00, KEY2VALID0000", systemPrompt: "s", history: HIST });
+  check("چرخش کلید: موفق با کلید دوم", r.ok, true);
+  check("چرخش کلید: پاسخ کلید دوم", r.text.includes("با کلید دوم"), true);
+  check("چرخش کلید: دقیقاً ۲ فراخوانی", keyCalls, 2);
+}
+
+// هر دو کلید نامعتبر → پیام خطای کلیدِ آخر گزارش می‌شود
+{
+  resetGeminiModelCache();
+  let calls = 0;
+  (globalThis as { fetch: unknown }).fetch = (async () => {
+    calls++;
+    return new Response(JSON.stringify({ error: { message: "API key not valid" } }), { status: 400 });
+  }) as typeof fetch;
+  const r = await callGemini({ apiKey: "KEYAINVALID00\nKEYBINVALID00", systemPrompt: "s", history: HIST });
+  check("هر دو کلید نامعتبر: پیام کلید", r.ok === false && r.text.includes("نامعتبر"), true);
+  check("هر دو کلید نامعتبر: دو فراخوانی", calls, 2);
+}
+
+// شبکه قطع (حتی با چند کلید) → پیام شبکه، بدون تکرار روی کلیدهای دیگر
+{
+  resetGeminiModelCache();
+  let netCalls2 = 0;
+  (globalThis as { fetch: unknown }).fetch = (async () => {
+    netCalls2++;
+    throw new TypeError("Failed to fetch");
+  }) as typeof fetch;
+  const r = await callGemini({ apiKey: "KEYAINVALID00,KEYBINVALID00", systemPrompt: "s", history: HIST });
+  check("چند کلید + شبکه قطع: پیام شبکه", r.ok === false && r.text === GEMINI_NET_FAIL_MSG, true);
+  check("چند کلید + شبکه قطع: فقط کلید اول امتحان شد", netCalls2, GEMINI_NET_ATTEMPTS);
+}
+
+// ─── پروکسی شخصی (v2.15) ───
+
+// پاک‌سازی آدرس — خالص و قابل‌تست
+check("پروکسی: آدرس سالم", normalizeProxyUrl("https://my-proxy.workers.dev"), "https://my-proxy.workers.dev");
+check("پروکسی: اسلش آخر حذف", normalizeProxyUrl("https://p.example.com/"), "https://p.example.com");
+check("پروکسی: بدون پروتکل نامعتبر", normalizeProxyUrl("my-proxy.workers.dev"), null);
+check("پروکسی: خالی", normalizeProxyUrl("  "), null);
+check("پروکسی: جاوااسکریپت تزریقی", normalizeProxyUrl("javascript:alert(1)"), null);
+
+// اگر localStorage موجود باشد (محیط اجرا): ذخیره/خواندن/پاک‌کردن پروکسی + پیام خطای پروکسی
+try {
+  const ls = (globalThis as { localStorage?: Storage }).localStorage;
+  if (ls) {
+    const { setGeminiProxy, usingProxy } = await import("../src/lib/ai/gemini");
+    setGeminiProxy("https://proxy.example.com/");
+    check("پروکسی: ذخیره و خواندن", usingProxy(), true);
+    (globalThis as { fetch: unknown }).fetch = (async () => {
+      throw new TypeError("Failed to fetch");
+    }) as typeof fetch;
+    const r = await listGeminiModels("KEYAINVALID00");
+    check("پروکسی: پیام اختصاصی پروکسی", r.ok === false && r.message === PROXY_NET_FAIL_MSG, true);
+    setGeminiProxy(null);
+    check("پروکسی: پاک شدن", usingProxy(), false);
+  } else {
+    console.log("ℹ localStorage در این محیط نیست — تست زمانی پروکسی رد شد");
+  }
+} catch {
+  console.log("ℹ تست زمانی پروکسی رد شد");
+}
+
+(globalThis as { fetch: unknown }).fetch = realFetch;
 
 // ─── تشخیص قطعی (v2.14.4) ───
 

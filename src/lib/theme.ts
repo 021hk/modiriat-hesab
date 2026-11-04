@@ -11,17 +11,12 @@ export const ACCENT_IDS = ["sabz", "banafsh", "abi", "asemani", "zard"] as const
 export type AccentId = (typeof ACCENT_IDS)[number];
 
 /** تم‌های ویژهٔ پس‌زمینه — none یعنی همان روشن/تاریک معمولی */
-export const SPECIAL_IDS = ["none", "meshki", "kahkeshani", "kahkeshani-rooz"] as const;
+export const SPECIAL_IDS = ["none", "meshki", "kahkeshani"] as const;
 export type SpecialId = (typeof SPECIAL_IDS)[number];
 
-/** آیا این تم ویژه از خانوادهٔ کهکشانی است (ستاره‌باران شب یا روز)؟ */
+/** آیا این تم ویژه از خانوادهٔ کهکشانی است؟ (شب و روز خودکار — v2.15) */
 export function isGalaxySpecial(id: SpecialId | null): boolean {
-  return id === "kahkeshani" || id === "kahkeshani-rooz";
-}
-
-/** کهکشانی روزانه روی پس‌زمینهٔ سفید می‌آید — بقیهٔ تم‌های ویژه تیره‌اند */
-export function isGalaxyDay(id: SpecialId | null): boolean {
-  return id === "kahkeshani-rooz";
+  return id === "kahkeshani";
 }
 
 export interface AccentOption {
@@ -48,9 +43,8 @@ export interface SpecialOption {
 
 export const SPECIALS: SpecialOption[] = [
   { id: "none", label: "معمولی", hint: "همان حالت روشن/تاریک عادی" },
-  { id: "meshki", label: "مشکی کامل", hint: "پس‌زمینهٔ کاملاً سیاه — مناسب صفحه‌های OLED" },
-  { id: "kahkeshani", label: "کهکشانی شب ⭐", hint: "شبِ ستاره‌باران با ستاره‌های چشمک‌زن به رنگ تم" },
-  { id: "kahkeshani-rooz", label: "کهکشانی روز ☀️", hint: "برعکسِ شب — صفحهٔ سفید با ستاره‌های رنگی به رنگ تم" },
+  { id: "meshki", label: "مشکی کامل", hint: "پس‌زمینهٔ کاملاً سیاه — مناسب OLED؛ خودکار روی حالت شب می‌رود" },
+  { id: "kahkeshani", label: "کهکشانی ⭐", hint: "ستاره‌باران خودکار — شب: فضای تیره با ستاره‌های روشن؛ روز: صفحهٔ سفید با ستاره‌های رنگی" },
 ];
 
 /** اعتبارسنجی ورودی ذخیره‌شده — مقدار نامعتبر → null (خالص و قابل‌تست) */
@@ -58,7 +52,10 @@ export function parseAccent(value: unknown): AccentId | null {
   return typeof value === "string" && (ACCENT_IDS as readonly string[]).includes(value) ? (value as AccentId) : null;
 }
 
+/** اعتبارسنجی ورودی ذخیره‌شده — مقدار نامعتبر → null (خالص و قابل‌تست)
+ *  مهاجرت (v2.15): «kahkeshani-rooz» نسخهٔ ۲.۱۴.۴ به «kahkeshani» تبدیل می‌شود */
 export function parseSpecial(value: unknown): SpecialId | null {
+  if (value === "kahkeshani-rooz") return "kahkeshani";
   return typeof value === "string" && (SPECIAL_IDS as readonly string[]).includes(value) ? (value as SpecialId) : null;
 }
 
@@ -92,7 +89,9 @@ export function applyAccent(id: AccentId): void {
   notifyThemeChange();
 }
 
-/** اعمال تم ویژه روی <html> (data-special) + حالت شب برای تم‌های تیره */
+/** اعمال تم ویژه روی <html> (data-special) + شرط حالت شب/روز (v2.15):
+ *  مشکی کامل فقط با حالت تاریک معنا دارد → خودکار شب می‌شود؛
+ *  کهکشانی از حالت روز/شب فعلی پیروی می‌کند و چیزی را تغییر نمی‌دهد. */
 export function applySpecial(id: SpecialId, setDarkMode: (v: "dark" | "light") => void): void {
   try {
     if (id === "none") localStorage.removeItem(SPECIAL_STORAGE_KEY);
@@ -103,8 +102,7 @@ export function applySpecial(id: SpecialId, setDarkMode: (v: "dark" | "light") =
   const html = document.documentElement;
   if (id === "none") html.removeAttribute("data-special");
   else html.setAttribute("data-special", id);
-  // تم‌های ویژهٔ شب تیره‌اند — به شب می‌رویم؛ کهکشانی روز روی سفید می‌آید — به روز برمی‌گردیم
-  if (id !== "none") setDarkMode(id === "kahkeshani-rooz" ? "light" : "dark");
+  if (id === "meshki") setDarkMode("dark");
   notifyThemeChange();
 }
 
@@ -122,5 +120,6 @@ export const THEME_BOOT_SCRIPT = `try{
 var a=localStorage.getItem('${ACCENT_STORAGE_KEY}');
 if(a&&a!=='sabz')document.documentElement.setAttribute('data-accent',a);
 var s=localStorage.getItem('${SPECIAL_STORAGE_KEY}');
+if(s==='kahkeshani-rooz')s='kahkeshani';
 if(s&&s!=='none')document.documentElement.setAttribute('data-special',s);
 }catch(e){}`;

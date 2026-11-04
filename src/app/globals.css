@@ -445,7 +445,7 @@ html[data-special="meshki"].dark {
   --sidebar-border: #26262a;
 }
 
-/* کهکشانی — فضای ستاره‌باران شب */
+/* کهکشانی — شب: فضای ستاره‌باران (با .dark هم می‌آید تا روی پس‌زمینهٔ رنگی اکسنت‌ها برنده شود) */
 html[data-special="kahkeshani"],
 html[data-special="kahkeshani"].dark {
   --background: #050817;
@@ -469,10 +469,9 @@ html[data-special="kahkeshani"].dark {
   --sidebar-border: #27315e;
 }
 
-/* کهکشانی روزانه (v2.14.4) — معکوسِ شب: صفحهٔ سفید با ستاره‌های رنگی؛
-   ویژگی‌ها حتی با کلاس dark هم روی سفید می‌مانند (اختصاصی‌تر از .dark است) */
-html[data-special="kahkeshani-rooz"],
-html[data-special="kahkeshani-rooz"].dark {
+/* کهکشانی — روز (v2.15): حالت روشن همان تم کهکشانی = صفحهٔ سفید با ستاره‌های رنگی؛
+   با :not(.dark) فقط وقتی حالت شب نیست اعمال می‌شود (خودکار، بدون تم جداگانه) */
+html[data-special="kahkeshani"]:not(.dark) {
   --background: #ffffff;
   --foreground: #232946;
   --card: #ffffff;

@@ -1,12 +1,13 @@
 "use client";
-// ─── پس‌زمینهٔ کهکشانی (v2.14.3 — روزانه در v2.14.4) ───
-/* با تم «کهکشانی شب» فعال می‌شود: فضای تیره + ستاره‌های ریز چشمک‌زن + سحابی‌های
-   شناور + شهاب. با تم «کهکشانی روز» برعکس می‌شود: صفحهٔ سفید و ستاره‌های رنگی
-   به رنگ تم. رنگ ستاره‌ها از متغیرهای --orb-* پیروی می‌کند.
+// ─── پس‌زمینهٔ کهکشانی (v2.14.3 — خودکار شب/روز در v2.15) ───
+/* با تم «کهکشانی» فعال می‌شود و از حالت روز/شب پیروی می‌کند:
+   شب (dark): فضای تیره + ستاره‌های ریز چشمک‌زن سفید/یخی + سحابی + شهاب؛
+   روز (روشن): صفحهٔ سفید + ستاره‌های رنگی به رنگ تم.
+   رنگ ستاره‌ها از متغیرهای --orb-* پیروی می‌کند.
    فقط سمت کلاینت و بعد از mount رندر می‌شود (بدون اختلاف hydration). */
 
 import { useEffect, useMemo, useState } from "react";
-import { isGalaxySpecial, isGalaxyDay } from "@/lib/theme";
+import { isGalaxySpecial } from "@/lib/theme";
 
 /** مولد شبه‌تصادفی با دانهٔ ثابت — چیدمان ستاره‌ها در هر اجرا یکسان می‌ماند */
 function mulberry32(seed: number): () => number {
@@ -44,17 +45,24 @@ function pickStarColor(rnd: () => number, day: boolean): string {
 
 export function GalaxyStars() {
   const [active, setActive] = useState(false);
+  // روز یعنی کلاس dark روی <html> نیست — با تغییر حالت روز/شب (دستی یا سیستمی) خودکار عوض می‌شود
   const [day, setDay] = useState(false);
 
   useEffect(() => {
     const check = () => {
-      const attr = document.documentElement.getAttribute("data-special");
-      setActive(isGalaxySpecial(attr as never));
-      setDay(isGalaxyDay(attr as never));
+      const html = document.documentElement;
+      setActive(isGalaxySpecial(html.getAttribute("data-special") as never));
+      setDay(!html.classList.contains("dark"));
     };
     check();
     window.addEventListener("hesab-theme-change", check);
-    return () => window.removeEventListener("hesab-theme-change", check);
+    // تغییر کلاس dark توسط next-themes (شامل تعویض خودکار حالت سیستم) را هم دنبال می‌کنیم
+    const obs = new MutationObserver(check);
+    obs.observe(document.documentElement, { attributes: true, attributeFilter: ["class", "data-special"] });
+    return () => {
+      window.removeEventListener("hesab-theme-change", check);
+      obs.disconnect();
+    };
   }, []);
 
   const stars = useMemo<Star[]>(() => {

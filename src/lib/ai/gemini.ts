@@ -15,9 +15,50 @@ export const GEMINI_MODELS = [
 ] as const;
 
 export const GEMINI_MODEL = GEMINI_MODELS[0]; // پیش‌فرض — برای سازگاری قدیمی
-const GEMINI_URL = (model: string) =>
-  `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
-const GEMINI_LIST_URL = "https://generativelanguage.googleapis.com/v1beta/models";
+
+// ─── پروکسی شخصی (v2.15) ───
+// چون گوگل دسترسی Gemini را از ایران محدود کرده و بعضی VPNها هم IPهایشان مسدود است،
+// کاربر می‌تواند آدرس یک «پروکسی شخصی» (مثلاً Cloudflare Worker خودش) را وارد کند؛
+// در این حالت همهٔ درخواست‌ها به جای گوگل به این آدرس می‌روند و مسیر همان است (/v1beta/...).
+export const GEMINI_DEFAULT_BASE = "https://generativelanguage.googleapis.com";
+export const PROXY_STORAGE_KEY = "hesab-yar:gemini-proxy";
+
+/** پاک‌سازی آدرس پروکسی — خالص و قابل‌تست: فقط http/https با میزبان معتبر */
+export function normalizeProxyUrl(raw: string | null | undefined): string | null {
+  const s = String(raw || "").trim().replace(/\/+$/, "");
+  if (!/^https?:\/\/[^\s/]+/i.test(s)) return null;
+  return s;
+}
+
+export function readGeminiProxy(): string | null {
+  try {
+    return normalizeProxyUrl(localStorage.getItem(PROXY_STORAGE_KEY));
+  } catch {
+    return null;
+  }
+}
+
+export function setGeminiProxy(raw: string | null): void {
+  try {
+    const v = normalizeProxyUrl(raw);
+    if (v) localStorage.setItem(PROXY_STORAGE_KEY, v);
+    else localStorage.removeItem(PROXY_STORAGE_KEY);
+  } catch {
+    // ignore
+  }
+}
+
+/** پایهٔ همهٔ فراخوانی‌های Gemini — پروکسی شخصی یا مستقیم گوگل */
+export function geminiBase(): string {
+  return readGeminiProxy() || GEMINI_DEFAULT_BASE;
+}
+
+export function usingProxy(): boolean {
+  return readGeminiProxy() !== null;
+}
+
+const GEMINI_URL = (model: string) => `${geminiBase()}/v1beta/models/${model}:generateContent`;
+const GEMINI_LIST_URL = () => `${geminiBase()}/v1beta/models`;
 const MODEL_CACHE_KEY = "hesab-yar:gemini-model";
 // اتصال‌های ایران/VPN گاهی قطع‌ووصل می‌شوند — هر تلاش حداکثر ۳۰ ثانیه و کل ۳ بار امتحان می‌شود
 export const GEMINI_TIMEOUT_MS = 30000;
@@ -25,7 +66,23 @@ export const GEMINI_NET_ATTEMPTS = 3;
 export const GEMINI_NET_FAIL_MSG =
   "پاسخی از سرور Gemini نرسید — برنامه ۳ بار تلاش خودکار کرد. " +
   "گوگل دسترسی سرورهای Gemini را از ایران محدود کرده است؛ روشن بودن VPN (با سرور خارجی) ضروری است. " +
-  "اینترنت را هم بررسی کنید و دوباره امتحان کنید.";
+  "اگر VPN هم جواب نمی‌دهد، در تنظیمات «پروکسی شخصی» را تنظیم کنید.";
+
+/** قطعی وقتی پروکسی شخصی تنظیم شده (v2.15) */
+export const PROXY_NET_FAIL_MSG =
+  "پروکسی شخصی تنظیم‌شده پاسخ نمی‌دهد — آدرس پروکسی را در تنظیمات بررسی کنید، یا آن را پاک کنید تا مستقیم به گوگل وصل شود (با VPN).";
+
+/** چند کلید از یک ورودی — خالص و قابل‌تست (هر خط یا ویرگول یک کلید؛ تکرارها حذف می‌شوند) */
+export function splitApiKeys(raw: string | null | undefined): string[] {
+  return Array.from(
+    new Set(
+      String(raw || "")
+        .split(/[\s,;،؛]+/)
+        .map((k) => k.trim())
+        .filter((k) => k.length >= 10)
+    )
+  );
+}
 
 // تشخیص علت قطعی (v2.14.4): اگر گوگل جواب داد ولی Gemini نه، یعنی تحریم منطقه‌ای است (VPN لازم است)
 export const GOOGLE_PROBE_URL = "https://www.google.com/generate_204";
@@ -136,7 +193,7 @@ export async function listGeminiModels(apiKey: string): Promise<{ ok: boolean; m
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort("timeout"), 15000);
     try {
-      res = await fetch(GEMINI_LIST_URL, { headers: { "x-goog-api-key": apiKey }, signal: ac.signal });
+      res = await fetch(GEMINI_LIST_URL(), { headers: { "x-goog-api-key": apiKey }, signal: ac.signal });
     } catch {
       if (attempt === 0) await sleep(900);
     } finally {
@@ -144,7 +201,9 @@ export async function listGeminiModels(apiKey: string): Promise<{ ok: boolean; m
     }
   }
   if (!res) {
-    // تشخیص دقیق (v2.14.4): گوگل در دسترس است ولی Gemini نه → تحریم منطقه‌ای؛ وگرنه قطعی اینترنت
+    // با پروکسی شخصی، آزمون گوگل معنا ندارد — خطای خود پروکسی گزارش می‌شود (v2.15)
+    if (usingProxy()) return { ok: false, models: [], message: PROXY_NET_FAIL_MSG };
+    // تشخیص دقیق: گوگل در دسترس است ولی Gemini نه → تحریم منطقه‌ای؛ وگرنه قطعی اینترنت
     const googleOk = await probeGoogleReachable();
     return { ok: false, models: [], message: networkFailMessage(googleOk) };
   }
@@ -167,16 +226,24 @@ export interface GeminiTestResult {
   message: string; // پیام فارسی برای نمایش
 }
 
-/** دکمه «تست اتصال» تنظیمات — کلید را می‌آزماید و مدل مناسب را پیدا و کش می‌کند */
+/** دکمه «تست اتصال» تنظیمات — همهٔ کلیدها را می‌آزماید و مدل مناسب را پیدا و کش می‌کند (چند کلید: v2.15) */
 export async function testGeminiConnection(apiKey: string): Promise<GeminiTestResult> {
-  const key = String(apiKey || "").trim();
-  if (!key) return { ok: false, model: null, message: "اول کلید Gemini را وارد و ذخیره کنید." };
-  const res = await listGeminiModels(key);
-  if (!res.ok) return { ok: false, model: null, message: res.message };
-  const model = pickGeminiModel(res.models);
-  if (!model) return { ok: false, model: null, message: "هیچ مدلی با این کلید قابل استفاده نیست — کلید جدیدی بگیرید." };
+  const keys = splitApiKeys(apiKey);
+  if (keys.length === 0) return { ok: false, model: null, message: "اول کلید Gemini را وارد و ذخیره کنید." };
+  const results = await Promise.all(keys.map((k) => listGeminiModels(k)));
+  const okIdx = results.findIndex((r) => r.ok);
+  const model = okIdx > -1 ? pickGeminiModel(results[okIdx].models) : null;
+  if (okIdx === -1 || !model) {
+    const firstFail = results.find((r) => !r.ok);
+    return { ok: false, model: null, message: firstFail?.message || "هیچ مدلی با این کلیدها قابل استفاده نیست — کلید جدیدی بگیرید." };
+  }
   writeCachedModel(model);
-  return { ok: true, model, message: `اتصال موفق است ✓ — مدل «${model}» آماده گفتگو است.` };
+  const okCount = results.filter((r) => r.ok).length;
+  const keyInfo =
+    keys.length > 1
+      ? ` کلیدها: ${okCount.toLocaleString("fa-IR", { useGrouping: false })} سالم از ${keys.length.toLocaleString("fa-IR", { useGrouping: false })}.`
+      : "";
+  return { ok: true, model, message: `اتصال موفق است ✓ — مدل «${model}» آماده گفتگو است.${keyInfo}` };
 }
 
 export interface AiChatMessage {
@@ -325,36 +392,36 @@ async function doCallWithRetry(model: string, body: Record<string, unknown>, api
 }
 
 /**
- * فراخوانی generateContent با جای‌گردی مدل (v2.14.2) + تایم‌اوت و تلاش مجدد شبکه (v2.14.3، v2.14.4):
- * ۱) اول مدل کش‌شدهٔ دستگاه یا پیش‌فرض (۳ تلاش برای شبکه)؛ ۲) روی خطای 404 («مدل نیست»)
- * کش پاک و بهترین مدل از فهرست واقعی کلید انتخاب می‌شود؛ ۳) اگر فهرست نشد، لیست ثابت
- * یکی‌یکی امتحان می‌شود. مدل موفق کش می‌شود تا تماس بعدی مستقیم برود.
+ * کل زنجیرهٔ مدل را با «یک کلید» امتحان می‌کند — خروجی: موفق، خطای شبکه، یا خطای کلید.
  */
-export async function callGemini(opts: {
-  apiKey: string;
-  systemPrompt: string;
-  history: AiChatMessage[];
-}): Promise<GeminiCallResult> {
+async function tryWithKey(
+  apiKey: string,
+  opts: { systemPrompt: string; history: AiChatMessage[] }
+): Promise<{ ok: boolean; text: string; network?: boolean; keyError?: boolean }> {
   // ۱) مدل کش‌شده یا پیش‌فرض — با تلاش مجدد شبکه
   const first = readCachedModel() || GEMINI_MODEL;
   const body = buildGeminiBody(first, opts.systemPrompt, opts.history);
-  const r = await doCallWithRetry(first, body, opts.apiKey);
+  const r = await doCallWithRetry(first, body, apiKey);
   if (r?.ok) {
     writeCachedModel(first);
     return { ok: true, text: r.text };
   }
-  if (r === null) return { ok: false, text: GEMINI_NET_FAIL_MSG };
+  if (r === null) return { ok: false, text: usingProxy() ? PROXY_NET_FAIL_MSG : GEMINI_NET_FAIL_MSG, network: true };
 
-  // ۲) فقط 404 یعنی «مدل نیست» → بقیهٔ خطاها مستقیم گزارش می‌شوند (کلید/سقف/...)
+  // خطای مربوط به «کلید» → کلید بعدی امتحان می‌شود (چند کلید: v2.15)
+  const keyError = r.status === 401 || r.status === 403 || r.status === 429 || (r.status === 400 && r.text.includes("کلید"));
+  if (keyError) return { ok: false, text: r.text, keyError: true };
+
+  // ۲) فقط 404 یعنی «مدل نیست» → بقیهٔ خطاها مستقیم گزارش می‌شوند
   if (r.status !== 404) return { ok: false, text: r.text };
   writeCachedModel(null);
 
   // ۳) فهرست واقعی مدل‌های مجاز این کلید
-  const listed = await listGeminiModels(opts.apiKey);
+  const listed = await listGeminiModels(apiKey);
   if (listed.ok) {
     const pick = pickGeminiModel(listed.models);
     if (pick && pick !== first) {
-      const r2 = await doCallOnce(pick, buildGeminiBody(pick, opts.systemPrompt, opts.history), opts.apiKey);
+      const r2 = await doCallOnce(pick, buildGeminiBody(pick, opts.systemPrompt, opts.history), apiKey);
       if (r2?.ok) {
         writeCachedModel(pick);
         return { ok: true, text: r2.text };
@@ -366,7 +433,7 @@ export async function callGemini(opts: {
   // ۴) لیست ثابت — هر مدلی که 404 نداد (بدون تکرار شبکه تا طولانی نشود)
   for (const m of GEMINI_MODELS) {
     if (m === first) continue;
-    const r3 = await doCallOnce(m, buildGeminiBody(m, opts.systemPrompt, opts.history), opts.apiKey);
+    const r3 = await doCallOnce(m, buildGeminiBody(m, opts.systemPrompt, opts.history), apiKey);
     if (r3?.ok) {
       writeCachedModel(m);
       return { ok: true, text: r3.text };
@@ -374,4 +441,32 @@ export async function callGemini(opts: {
     if (r3 && r3.status !== 404) return { ok: false, text: r3.text };
   }
   return { ok: false, text: "هیچ مدل Gemini با این کلید پاسخ نداد — از دکمهٔ «تست اتصال» در تنظیمات وضعیت کلید و مدل‌های فعال را ببینید." };
+}
+
+/**
+ * فراخوانی generateContent (v2.14.2 جای‌گردی مدل، v2.14.3 تایم‌اوت/تلاش مجدد، v2.15 چند کلید + پروکسی):
+ * - همهٔ کلیدهای واردشده (هر خط/ویرگول یک کلید) به‌ترتیب امتحان می‌شوند؛ روی خطای کلید
+ *   (نامعتبر/دسترسی رد شده/سقف مصرف) سراغ کلید بعدی می‌رود.
+ * - درخواست‌ها به پروکسی شخصی (اگر تنظیم باشد) وگرنه مستقیم به گوگل می‌روند.
+ * - روی 404 بهترین مدل از فهرست واقعی کلید انتخاب و کش می‌شود.
+ */
+export async function callGemini(opts: {
+  apiKey: string;
+  systemPrompt: string;
+  history: AiChatMessage[];
+}): Promise<GeminiCallResult> {
+  const keys = splitApiKeys(opts.apiKey);
+  if (keys.length === 0) return { ok: false, text: "اول کلید Gemini را در تنظیمات وارد و ذخیره کنید." };
+  let lastKeyError = "";
+  for (const key of keys) {
+    const r = await tryWithKey(key, opts);
+    if (r.ok) return { ok: true, text: r.text };
+    if (r.network) return { ok: false, text: r.text }; // قطعی شبکه/پروکسی — کلید دیگر کمک نمی‌کند
+    if (r.keyError) {
+      lastKeyError = r.text;
+      continue; // کلید بعدی
+    }
+    return { ok: false, text: r.text }; // خطای دیگر (مسدودسازی/پاسخ خالی/...) — گزارش می‌شود
+  }
+  return { ok: false, text: lastKeyError || "هیچ‌کدام از کلیدهای Gemini پاسخ نداد — از «تست اتصال» در تنظیمات وضعیت را ببینید." };
 }

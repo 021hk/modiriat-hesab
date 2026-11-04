@@ -6,6 +6,7 @@ import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import {
@@ -45,12 +46,12 @@ import {
   type ReleaseInfo,
 } from "@/lib/app-update";
 import { openExternalUrl } from "@/lib/native-sms";
-import { testGeminiConnection, cachedGeminiModel, resetGeminiModelCache } from "@/lib/ai/gemini";
+import { testGeminiConnection, cachedGeminiModel, resetGeminiModelCache, splitApiKeys, readGeminiProxy, setGeminiProxy } from "@/lib/ai/gemini";
 import { ACCENTS, SPECIALS, applyAccent, applySpecial, readStoredAccent, readStoredSpecial, type AccentId, type SpecialId } from "@/lib/theme";
 import { checkNotifPermission, requestNotifPermission, syncInstallmentNotifications, fireTestNotification, notifSupported } from "@/lib/notifications";
 import type { AppSettings, NotifSettings } from "@/lib/client-api";
 
-const APP_VERSION = "۲.۱۴.۴";
+const APP_VERSION = "۲.۱۵.۰";
 
 function ThemeSection() {
   const { theme, setTheme } = useTheme();
@@ -77,6 +78,8 @@ function ThemeSection() {
     setSpecial(id);
     applySpecial(id, (v) => setTheme(v));
   };
+  // شرط (v2.15): تم مشکی کامل فقط با حالت تاریک معنا دارد — روشن/سیستمی غیرفعال می‌شوند
+  const meshkiLocksLight = special === "meshki";
 
   return (
     <Card>
@@ -90,18 +93,30 @@ function ThemeSection() {
         {/* حالت روز و شب */}
         <div>
           <p className="mb-2 text-sm font-medium">حالت روز و شب</p>
+          {meshkiLocksLight && (
+            <p className="mb-2 rounded-lg bg-muted/60 p-2 text-[11px] leading-5 text-muted-foreground">
+              ⬛ با تم «مشکی کامل»، حالت شب خودکار و الزامی است — برای حالت روشن اول تم ویژه را روی «معمولی» بگذارید.
+            </p>
+          )}
           <div className="grid grid-cols-3 gap-2">
             {options.map((o) => {
               const active = mounted && theme === o.value;
+              const locked = meshkiLocksLight && o.value !== "dark";
               return (
                 <button
                   key={o.value}
                   type="button"
-                  onClick={() => setTheme(o.value)}
+                  title={locked ? "در تم مشکی کامل فقط حالت شب فعال است" : undefined}
+                  onClick={() => {
+                    if (locked) return;
+                    setTheme(o.value);
+                  }}
                   className={`flex flex-col items-center gap-1.5 rounded-xl border-2 p-3 text-sm font-medium transition ${
-                    active
-                      ? "border-emerald-600 bg-emerald-50 text-emerald-800 dark:border-emerald-500 dark:bg-emerald-950/50 dark:text-emerald-300"
-                      : "border-border text-muted-foreground hover:border-emerald-300 dark:hover:border-emerald-800"
+                    locked
+                      ? "cursor-not-allowed border-border/50 text-muted-foreground/40"
+                      : active
+                        ? "border-emerald-600 bg-emerald-50 text-emerald-800 dark:border-emerald-500 dark:bg-emerald-950/50 dark:text-emerald-300"
+                        : "border-border text-muted-foreground hover:border-emerald-300 dark:hover:border-emerald-800"
                   }`}
                 >
                   <o.icon className="h-5 w-5" />
@@ -148,17 +163,10 @@ function ThemeSection() {
         {/* تم‌های ویژه */}
         <div>
           <p className="mb-2 text-sm font-medium">تم ویژه</p>
-          <div className="grid grid-cols-2 gap-2">
+          <div className="grid grid-cols-3 gap-2">
             {SPECIALS.map((s) => {
               const active = mounted && special === s.id;
-              const Icon =
-                s.id === "meshki"
-                  ? MoonStar
-                  : s.id === "kahkeshani"
-                    ? Sparkles
-                    : s.id === "kahkeshani-rooz"
-                      ? Sun
-                      : RefreshCw;
+              const Icon = s.id === "meshki" ? MoonStar : s.id === "kahkeshani" ? Sparkles : RefreshCw;
               return (
                 <button
                   key={s.id}
@@ -180,10 +188,8 @@ function ThemeSection() {
           {mounted && special !== "none" && (
             <p className="mt-2 text-xs leading-5 text-muted-foreground">
               {special === "kahkeshani"
-                ? "✨ تم کهکشانی شب فعال شد — فضای تیره با ستاره‌های چشمک‌زن به رنگ تم."
-                : special === "kahkeshani-rooz"
-                  ? "☀️ تم کهکشانی روز فعال شد — برعکسِ شب: صفحهٔ سفید با ستاره‌های رنگی به رنگ تم."
-                  : "⬛ تم مشکی کامل فعال شد — پس‌زمینهٔ کاملاً سیاه (مناسب نمایشگر OLED)."}
+                ? "✨ تم کهکشانی فعال شد — خودکار: در حالت شب فضای تیره با ستاره‌های روشن، در حالت روشن صفحهٔ سفید با ستاره‌های رنگی به رنگ تم."
+                : "⬛ تم مشکی کامل فعال شد — پس‌زمینهٔ کاملاً سیاه (مناسب OLED)؛ حالت شب هم خودکار فعال شد."}
             </p>
           )}
         </div>
@@ -685,14 +691,18 @@ function AiSection() {
 
   const save = useMutation({
     mutationFn: (geminiApiKey: string | null) => api.put("/api/settings", { geminiApiKey }),
-    onSuccess: () => {
+    onSuccess: (_data, geminiApiKey) => {
       // کلید عوض شد — مدل کش‌شدهٔ قبلی ممکن است برای کلید جدید معتبر نباشد
       resetGeminiModelCache();
       setActiveModel(null);
       setTestMsg(null);
       qc.invalidateQueries({ queryKey: ["app-settings"] });
       setKeyInput(null);
-      toast({ title: "کلید ذخیره شد", description: "گوی هوشمند حالا فعال است — روی گوی سبز بزن" });
+      const n = splitApiKeys(geminiApiKey || "").length;
+      toast({
+        title: n > 1 ? `کلیدها ذخیره شد (${n.toLocaleString("fa-IR", { useGrouping: false })} کلید)` : "کلید ذخیره شد",
+        description: n > 1 ? "اگر یک کلید خطا بدهد، بعدی خودکار امتحان می‌شود" : "گوی هوشمند حالا فعال است — روی گوی سبز بزن",
+      });
     },
     onError: (e: Error) => toast({ title: "خطا", description: e.message, variant: "destructive" }),
   });
@@ -767,19 +777,29 @@ function AiSection() {
           گوی سبز شناور روی صفحه دستیار گفتگوی شماست: دستور بده — مثل «مبالغ بین ۱۰۰ تا ۵۰۰ هزار تومان رو ببر تو
           هزینه‌های جاری» — تا خودش انجام بدهد. برای فعال‌سازی، کلید رایگان Gemini لازم است.
         </p>
-        <div className="flex gap-2">
-          <Input
+        {/* چند کلید (v2.15): هر خط یک کلید — روی خطای کلید، بعدی خودکار امتحان می‌شود */}
+        <div className="relative">
+          <Textarea
             dir="ltr"
-            type={showKey ? "text" : "password"}
-            className="flex-1 text-left font-mono text-xs"
-            placeholder="AIza... — کلید Gemini"
+            rows={showKey ? 4 : 3}
+            className="resize-none text-left font-mono text-xs"
+            placeholder={showKey ? "AIza...\nAIza... — هر کلید در یک خط" : "AIza... — کلیدها (هر کلید در یک خط)"}
             value={shown}
             onChange={(e) => setKeyInput(e.target.value)}
           />
-          <Button variant="outline" size="icon" className="h-10 w-10 shrink-0" onClick={() => setShowKey((v) => !v)} aria-label="نمایش کلید">
-            <ShieldCheck className="h-4 w-4" />
+          <Button
+            variant="outline"
+            size="icon"
+            className="absolute left-1 top-1 h-7 w-7"
+            onClick={() => setShowKey((v) => !v)}
+            aria-label="نمایش کلیدها"
+          >
+            <ShieldCheck className="h-3.5 w-3.5" />
           </Button>
         </div>
+        {showKey && (
+          <p className="text-[11px] leading-5 text-muted-foreground">⚠️ کلیدها را در جایی عمومی کپی نکنید — نمایش خاموش را بزنید بعد از دیدن.</p>
+        )}
         <div className="flex flex-wrap items-center gap-2">
           <Button
             size="sm"
@@ -787,7 +807,7 @@ function AiSection() {
             disabled={keyInput === null || save.isPending}
             onClick={() => save.mutate(keyInput?.trim() || null)}
           >
-            ذخیره کلید
+            ذخیره کلیدها
           </Button>
           <Button variant="outline" size="sm" disabled={testing} onClick={() => void runTest()}>
             {testing ? <Loader2 className="ml-1 h-4 w-4 animate-spin" /> : <RefreshCw className="ml-1 h-4 w-4" />}
@@ -795,12 +815,15 @@ function AiSection() {
           </Button>
           {saved && (
             <Button variant="outline" size="sm" onClick={() => save.mutate(null)} disabled={save.isPending}>
-              حذف کلید
+              حذف کلیدها
             </Button>
           )}
           {saved && (
             <span className="flex items-center gap-1 text-[11px] text-emerald-700 dark:text-emerald-400">
-              <CheckCircle2 className="h-3.5 w-3.5" /> فعال — پایان کلید: …{saved.slice(-4)}
+              <CheckCircle2 className="h-3.5 w-3.5" />
+              {splitApiKeys(saved).length > 1
+                ? `فعال — ${splitApiKeys(saved).length.toLocaleString("fa-IR", { useGrouping: false })} کلید — پایان آخرین: …${splitApiKeys(saved).slice(-1)[0].slice(-4)}`
+                : `فعال — پایان کلید: …${saved.slice(-4)}`}
             </span>
           )}
         </div>
@@ -828,13 +851,82 @@ function AiSection() {
           <ExternalLink className="h-3 w-3" />
           گرفتن کلید رایگان از aistudio.google.com/apikey
         </button>
+        {/* پروکسی شخصی (v2.15) — دور زدن محدودیت منطقه‌ای گوگل */}
+        <div className="rounded-xl border p-3">
+          <p className="text-sm font-medium">پروکسی شخصی (اختیاری)</p>
+          <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
+            اگر VPN هم جواب نمی‌دهد، آدرس یک پروکسی واسط (مثل Cloudflare Worker خودتان) را وارد کنید؛
+            درخواست‌ها به جای گوگل به آن می‌روند و مسیر همان <span dir="ltr" className="font-mono">/v1beta/…</span> است. خالی = اتصال مستقیم.
+          </p>
+          <ProxyRow />
+        </div>
         <p className="rounded-lg bg-muted/60 p-2.5 text-[11px] leading-5 text-muted-foreground">
-          امنیت: کلید فقط روی خود دستگاه ذخیره می‌شود. برای پاسخ به دستورها، متن درخواست به سرور Gemini
-          گوگل می‌رود؛ داده‌های حساس شما (شماره‌ها و جزئیات) خارج نمی‌شوند. اگر «مدل پیدا نشد» دیدید،
-          دکمهٔ تست اتصال خودش بهترین مدل فعالِ کلید شما را پیدا و ذخیره می‌کند.
+          امنیت: کلیدها فقط روی خود دستگاه ذخیره می‌شوند. برای پاسخ به دستورها، متن درخواست به سرور Gemini
+          (مستقیم یا از پروکسی شما) می‌رود؛ داده‌های حساس شما (شماره‌ها و جزئیات) خارج نمی‌شوند. اگر «مدل پیدا نشد» دیدید،
+          دکمهٔ تست اتصال خودش بهترین مدل فعالِ کلیدهای شما را پیدا و ذخیره می‌کند.
         </p>
       </CardContent>
     </Card>
+  );
+}
+
+// ─── ردیف ورودی پروکسی شخصی Gemini (v2.15) ───
+
+function ProxyRow() {
+  const { toast } = useToast();
+  const [proxyInput, setProxyInput] = useState<string | null>(null);
+  const [current, setCurrent] = useState<string | null>(null);
+
+  useEffect(() => {
+    setCurrent(readGeminiProxy());
+  }, []);
+
+  const shown = proxyInput !== null ? proxyInput : current || "";
+
+  return (
+    <div className="mt-2 space-y-2">
+      <Input
+        dir="ltr"
+        className="text-left font-mono text-xs"
+        placeholder="https://my-gemini-proxy.workers.dev"
+        value={shown}
+        onChange={(e) => setProxyInput(e.target.value)}
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          size="sm"
+          variant="outline"
+          disabled={proxyInput === null}
+          onClick={() => {
+            setGeminiProxy(proxyInput);
+            setCurrent(readGeminiProxy());
+            setProxyInput(null);
+            toast({ title: readGeminiProxy() ? "پروکسی ذخیره شد ✓" : "پروکسی پاک شد — اتصال مستقیم به گوگل" });
+          }}
+        >
+          ذخیره پروکسی
+        </Button>
+        {current && (
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => {
+              setGeminiProxy(null);
+              setCurrent(null);
+              setProxyInput(null);
+              toast({ title: "پروکسی پاک شد — اتصال مستقیم به گوگل" });
+            }}
+          >
+            حذف
+          </Button>
+        )}
+        {current && (
+          <span className="flex items-center gap-1 text-[11px] text-emerald-700 dark:text-emerald-400">
+            <CheckCircle2 className="h-3.5 w-3.5" /> فعال: <span dir="ltr" className="font-mono">{current}</span>
+          </span>
+        )}
+      </div>
+    </div>
   );
 }
 
