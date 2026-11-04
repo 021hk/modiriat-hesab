@@ -6,6 +6,9 @@ import {
   callGemini,
   GEMINI_NET_ATTEMPTS,
   GEMINI_NET_FAIL_MSG,
+  listGeminiModels,
+  networkFailMessage,
+  probeGoogleReachable,
   resetGeminiModelCache,
   type AiChatMessage,
 } from "../src/lib/ai/gemini";
@@ -96,6 +99,43 @@ let httpCalls = 0;
 
 (globalThis as { fetch: unknown }).fetch = realFetch;
 resetGeminiModelCache();
+
+// ─── تشخیص قطعی (v2.14.4) ───
+
+// پیام تحریم منطقه‌ای (گوگل در دسترس است ولی Gemini نه) — باید VPN را بگوید
+const msgBlocked = networkFailMessage(true);
+check("تحریم: پیام VPN", msgBlocked.includes("VPN") && msgBlocked.includes("IP ایران"), true);
+// پیام قطعی اینترنت
+const msgNet = networkFailMessage(false);
+check("قطعی اینترنت: پیام اینترنت", msgNet.includes("اینترنت") && !msgNet.includes("IP ایران"), true);
+// دو پیام متمایز باشند
+check("دو پیام متمایز", msgBlocked !== msgNet, true);
+
+// تست اتصال وقتی Gemini جواب نمی‌دهد ولی پروب گوگل موفق است → پیام تحریم/VPN
+(globalThis as { fetch: unknown }).fetch = (async (_url: string | URL | Request) => {
+  const u = typeof _url === "string" ? _url : _url instanceof URL ? _url.href : String(_url);
+  if (u.includes("generate_204")) return new Response(null, { status: 204 });
+  throw new TypeError("Failed to fetch");
+}) as typeof fetch;
+{
+  const r = await listGeminiModels("k");
+  check("تست اتصال: تشخیص تحریم", r.ok === false && r.message === networkFailMessage(true), true);
+  const probe = await probeGoogleReachable();
+  check("پروب گوگل: در دسترس", probe, true);
+}
+
+// وقتی حتی گوگل هم در دسترس نیست → پیام قطعی اینترنت
+(globalThis as { fetch: unknown }).fetch = (async () => {
+  throw new TypeError("Failed to fetch");
+}) as typeof fetch;
+{
+  const r = await listGeminiModels("k");
+  check("تست اتصال: تشخیص قطعی اینترنت", r.ok === false && r.message === networkFailMessage(false), true);
+  const probe = await probeGoogleReachable();
+  check("پروب گوگل: در دسترس نیست", probe, false);
+}
+
+(globalThis as { fetch: unknown }).fetch = realFetch;
 
 console.log(`\nنتیجه: ${pass} درست، ${failCount} غلط`);
 process.exit(failCount > 0 ? 1 : 0);

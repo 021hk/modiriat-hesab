@@ -19,12 +19,37 @@ const GEMINI_URL = (model: string) =>
   `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 const GEMINI_LIST_URL = "https://generativelanguage.googleapis.com/v1beta/models";
 const MODEL_CACHE_KEY = "hesab-yar:gemini-model";
-// اتصال‌های ایران/VPN گاهی قطع‌ووصل می‌شوند — هر تلاش حداکثر ۴۰ ثانیه و کل ۳ بار امتحان می‌شود
-export const GEMINI_TIMEOUT_MS = 40000;
+// اتصال‌های ایران/VPN گاهی قطع‌ووصل می‌شوند — هر تلاش حداکثر ۳۰ ثانیه و کل ۳ بار امتحان می‌شود
+export const GEMINI_TIMEOUT_MS = 30000;
 export const GEMINI_NET_ATTEMPTS = 3;
 export const GEMINI_NET_FAIL_MSG =
-  "سرور Gemini در دسترس نیست — اتصال اینترنت (و در ایران VPN) را بررسی کنید و دوباره امتحان کنید. " +
-  `برنامه ${GEMINI_NET_ATTEMPTS.toLocaleString("fa-IR", { useGrouping: false })} بار تلاش خودکار کرد که پاسخی نرسید.`;
+  "پاسخی از سرور Gemini نرسید — برنامه ۳ بار تلاش خودکار کرد. " +
+  "گوگل دسترسی سرورهای Gemini را از ایران محدود کرده است؛ روشن بودن VPN (با سرور خارجی) ضروری است. " +
+  "اینترنت را هم بررسی کنید و دوباره امتحان کنید.";
+
+// تشخیص علت قطعی (v2.14.4): اگر گوگل جواب داد ولی Gemini نه، یعنی تحریم منطقه‌ای است (VPN لازم است)
+export const GOOGLE_PROBE_URL = "https://www.google.com/generate_204";
+
+/** پیام خطای شبکه بر اساس دسترس‌پذیری گوگل — خالص و قابل‌تست */
+export function networkFailMessage(googleReachable: boolean): string {
+  return googleReachable
+    ? "اینترنت وصل است ولی سرور Gemini جواب نمی‌دهد — گوگل دسترسی Gemini را از IP ایران محدود کرده است. VPN را روشن کنید (سرور خارجی) و دوباره «تست اتصال» را بزنید."
+    : "اتصال به اینترنت برقرار نشد — اینترنت دستگاه را بررسی کنید؛ در ایران برای دسترسی به سرورهای گوگل معمولاً VPN هم لازم است.";
+}
+
+/** آزمون سریع دسترسی عمومی به گوگل (no-cors — فقط رسیدن پاسخ شبکه مهم است) */
+export async function probeGoogleReachable(timeoutMs = 7000): Promise<boolean> {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort("timeout"), timeoutMs);
+  try {
+    await fetch(GOOGLE_PROBE_URL, { mode: "no-cors", cache: "no-store", signal: ac.signal });
+    return true;
+  } catch {
+    return false;
+  } finally {
+    clearTimeout(timer);
+  }
+}
 
 /** ساخت بدنهٔ درخواست — خالص و قابل‌تست */
 export function buildGeminiBody(model: string, systemPrompt: string, history: AiChatMessage[]): Record<string, unknown> {
@@ -107,27 +132,21 @@ export function resetGeminiModelCache(): void {
  */
 export async function listGeminiModels(apiKey: string): Promise<{ ok: boolean; models: GeminiModelInfo[]; message: string }> {
   let res: Response | null = null;
-  let timedOut = false;
   for (let attempt = 0; attempt < 2 && !res; attempt++) {
     const ac = new AbortController();
-    const timer = setTimeout(() => ac.abort("timeout"), 20000);
+    const timer = setTimeout(() => ac.abort("timeout"), 15000);
     try {
       res = await fetch(GEMINI_LIST_URL, { headers: { "x-goog-api-key": apiKey }, signal: ac.signal });
     } catch {
-      timedOut = ac.signal.aborted;
       if (attempt === 0) await sleep(900);
     } finally {
       clearTimeout(timer);
     }
   }
   if (!res) {
-    return {
-      ok: false,
-      models: [],
-      message: timedOut
-        ? "پاسخی از سرور Gemini نرسید (تایم‌اوت) — اتصال اینترنت/VPN را بررسی کنید و دوباره امتحان کنید."
-        : "اتصال اینترنت برقرار نشد — برای دستیار هوشمند به اینترنت (و در ایران معمولاً VPN) نیاز است.",
-    };
+    // تشخیص دقیق (v2.14.4): گوگل در دسترس است ولی Gemini نه → تحریم منطقه‌ای؛ وگرنه قطعی اینترنت
+    const googleOk = await probeGoogleReachable();
+    return { ok: false, models: [], message: networkFailMessage(googleOk) };
   }
   if (!res.ok) {
     const t = await res.text().catch(() => "");
@@ -306,7 +325,7 @@ async function doCallWithRetry(model: string, body: Record<string, unknown>, api
 }
 
 /**
- * فراخوانی generateContent با جای‌گردی مدل (v2.14.2) + تایم‌اوت و تلاش مجدد شبکه (v2.14.3):
+ * فراخوانی generateContent با جای‌گردی مدل (v2.14.2) + تایم‌اوت و تلاش مجدد شبکه (v2.14.3، v2.14.4):
  * ۱) اول مدل کش‌شدهٔ دستگاه یا پیش‌فرض (۳ تلاش برای شبکه)؛ ۲) روی خطای 404 («مدل نیست»)
  * کش پاک و بهترین مدل از فهرست واقعی کلید انتخاب می‌شود؛ ۳) اگر فهرست نشد، لیست ثابت
  * یکی‌یکی امتحان می‌شود. مدل موفق کش می‌شود تا تماس بعدی مستقیم برود.

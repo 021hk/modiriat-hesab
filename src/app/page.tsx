@@ -177,7 +177,7 @@ function AppContent() {
       {/* فوتر */}
       <footer className="mt-auto hidden border-t bg-card py-4 lg:block">
         <div className="mx-auto max-w-6xl px-4 text-center text-xs text-muted-foreground">
-          حساب‌یار — نسخه ۲.۱۴.۳ | اپلیکیشن آفلاین — ثبت خودکار پیامک بانکی + دستیار هوشمند
+          حساب‌یار — نسخه ۲.۱۴.۴ | اپلیکیشن آفلاین — ثبت خودکار پیامک بانکی + دستیار هوشمند
         </div>
       </footer>
 

@@ -11,8 +11,18 @@ export const ACCENT_IDS = ["sabz", "banafsh", "abi", "asemani", "zard"] as const
 export type AccentId = (typeof ACCENT_IDS)[number];
 
 /** تم‌های ویژهٔ پس‌زمینه — none یعنی همان روشن/تاریک معمولی */
-export const SPECIAL_IDS = ["none", "meshki", "kahkeshani"] as const;
+export const SPECIAL_IDS = ["none", "meshki", "kahkeshani", "kahkeshani-rooz"] as const;
 export type SpecialId = (typeof SPECIAL_IDS)[number];
+
+/** آیا این تم ویژه از خانوادهٔ کهکشانی است (ستاره‌باران شب یا روز)؟ */
+export function isGalaxySpecial(id: SpecialId | null): boolean {
+  return id === "kahkeshani" || id === "kahkeshani-rooz";
+}
+
+/** کهکشانی روزانه روی پس‌زمینهٔ سفید می‌آید — بقیهٔ تم‌های ویژه تیره‌اند */
+export function isGalaxyDay(id: SpecialId | null): boolean {
+  return id === "kahkeshani-rooz";
+}
 
 export interface AccentOption {
   id: AccentId;
@@ -27,7 +37,7 @@ export const ACCENTS: AccentOption[] = [
   { id: "banafsh", label: "بنفش", swatch: "#7c3aed", hint: "بنفش ملایم و مدرن" },
   { id: "abi", label: "آبی", swatch: "#2563eb", hint: "آبی کلاسیک" },
   { id: "asemani", label: "آسمانی", swatch: "#0284c7", hint: "آبی روشن آسمانی" },
-  { id: "zard", label: "زرد", swatch: "#d97706", hint: "طلایی/کهربایی گرم" },
+  { id: "zard", label: "زرد", swatch: "#facc15", hint: "زرد خالص و پرانرژی" },
 ];
 
 export interface SpecialOption {
@@ -39,7 +49,8 @@ export interface SpecialOption {
 export const SPECIALS: SpecialOption[] = [
   { id: "none", label: "معمولی", hint: "همان حالت روشن/تاریک عادی" },
   { id: "meshki", label: "مشکی کامل", hint: "پس‌زمینهٔ کاملاً سیاه — مناسب صفحه‌های OLED" },
-  { id: "kahkeshani", label: "کهکشانی ⭐", hint: "فضای تیره با ستاره‌های چشمک‌زن به رنگ تم" },
+  { id: "kahkeshani", label: "کهکشانی شب ⭐", hint: "شبِ ستاره‌باران با ستاره‌های چشمک‌زن به رنگ تم" },
+  { id: "kahkeshani-rooz", label: "کهکشانی روز ☀️", hint: "برعکسِ شب — صفحهٔ سفید با ستاره‌های رنگی به رنگ تم" },
 ];
 
 /** اعتبارسنجی ورودی ذخیره‌شده — مقدار نامعتبر → null (خالص و قابل‌تست) */
@@ -92,8 +103,8 @@ export function applySpecial(id: SpecialId, setDarkMode: (v: "dark" | "light") =
   const html = document.documentElement;
   if (id === "none") html.removeAttribute("data-special");
   else html.setAttribute("data-special", id);
-  // تم‌های ویژه تیره‌اند — اگر برنامه در حالت روشن است، به شب می‌رویم تا متن خوانا بماند
-  if (id !== "none") setDarkMode("dark");
+  // تم‌های ویژهٔ شب تیره‌اند — به شب می‌رویم؛ کهکشانی روز روی سفید می‌آید — به روز برمی‌گردیم
+  if (id !== "none") setDarkMode(id === "kahkeshani-rooz" ? "light" : "dark");
   notifyThemeChange();
 }
 

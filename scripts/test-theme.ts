@@ -7,6 +7,8 @@ import {
   SPECIALS,
   SPECIAL_IDS,
   THEME_BOOT_SCRIPT,
+  isGalaxyDay,
+  isGalaxySpecial,
   parseAccent,
   parseSpecial,
   type AccentId,
@@ -25,9 +27,9 @@ function check(name: string, actual: unknown, expected: unknown) {
   }
 }
 
-// رجیستری: ۵ رنگ + ۳ تم ویژه، شناسه‌ها یکتا، همهٔ رنگ‌ها hex معتبر
+// رجیستری: ۵ رنگ + ۴ تم ویژه، شناسه‌ها یکتا، همهٔ رنگ‌ها hex معتبر
 check("تعداد رنگ‌ها", ACCENTS.length, 5);
-check("تعداد تم‌های ویژه", SPECIALS.length, 3);
+check("تعداد تم‌های ویژه", SPECIALS.length, 4);
 check("شناسه‌های یکتا", new Set(ACCENT_IDS).size, ACCENT_IDS.length);
 check("شناسه‌های ویژه یکتا", new Set(SPECIAL_IDS).size, SPECIAL_IDS.length);
 check("swatch hex معتبر", ACCENTS.every((a) => /^#[0-9a-f]{6}$/i.test(a.swatch)), true);
@@ -38,7 +40,17 @@ check("parseAccent درست", parseAccent("banafsh"), "banafsh");
 check("parseAccent نامعتبر", parseAccent("hacker"), null);
 check("parseAccent غیررشته", parseAccent(42), null);
 check("parseSpecial درست", parseSpecial("kahkeshani"), "kahkeshani");
+check("parseSpecial کهکشانی روز", parseSpecial("kahkeshani-rooz"), "kahkeshani-rooz");
 check("parseSpecial نامعتبر", parseSpecial("dark"), null);
+
+// کهکشانی شب/روز (v2.14.4)
+check("کهکشانی شب جزو خانوادهٔ کهکشان", isGalaxySpecial("kahkeshani"), true);
+check("کهکشانی روز جزو خانوادهٔ کهکشان", isGalaxySpecial("kahkeshani-rooz"), true);
+check("مشکی جزو کهکشان نیست", isGalaxySpecial("meshki"), false);
+check("معمولی جزو کهکشان نیست", isGalaxySpecial("none"), false);
+check("روز فقط برای kahkeshani-rooz", isGalaxyDay("kahkeshani-rooz"), true);
+check("شب حالت روز نیست", isGalaxyDay("kahkeshani"), false);
+check("هیچ حالت روز نیست", isGalaxyDay(null), false);
 
 // اسکریپت بوت باید attribute های درست را بگذارد و در برابر کوتیشن امن باشد
 check("بوت: کلید accent", THEME_BOOT_SCRIPT.includes("hesab-yar:accent"), true);

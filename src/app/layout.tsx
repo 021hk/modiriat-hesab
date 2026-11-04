@@ -52,18 +52,24 @@ export default function RootLayout({
         <style
           dangerouslySetInnerHTML={{
             __html: `
-              html { background-color: #f4f8f6; color-scheme: light; }
-              html.dark { background-color: #0b1410; color-scheme: dark; }
-              html[data-special='meshki'] { background-color: #000000; color-scheme: dark; }
-              html[data-special='kahkeshani'] { background-color: #050817; color-scheme: dark; }
-              html.dark #boot-splash { background-color: #0b1410 !important; }
-              html[data-special='meshki'] #boot-splash { background-color: #000000 !important; }
-              html[data-special='kahkeshani'] #boot-splash { background-color: #050817 !important; }
-              html.dark #boot-splash .boot-text { color: #37b78a !important; }
-              body { background-color: #f4f8f6; color: #0e1913; margin: 0; }
-              html.dark body { background-color: #0b1410; color: #ecefed; }
-              html[data-special='meshki'] body { background-color: #000000; color: #f4f4f5; }
-              html[data-special='kahkeshani'] body { background-color: #050817; color: #e7eaf6; }
+              /* رنگ‌ها با var از پالت تم می‌آیند (v2.14.4) تا پس‌زمینهٔ هر رنگ اصلی
+                 (سبز/بنفش/آبی/آسمانی/زرد) در شب «رنگ + مشکی» همان رنگ را داشته باشد؛
+                 قبل از بارگذاری CSS هم fallback همان رنگ پیش‌فرض است (بدون پرش رنگ). */
+              html { background-color: var(--background, #f4f8f6); color-scheme: light; }
+              html.dark { background-color: var(--background, #0b1410); color-scheme: dark; }
+              html[data-special='meshki'] { background-color: var(--background, #000000); color-scheme: dark; }
+              html[data-special='kahkeshani'] { background-color: var(--background, #050817); color-scheme: dark; }
+              html[data-special='kahkeshani-rooz'] { background-color: var(--background, #ffffff); color-scheme: light; }
+              html.dark #boot-splash { background-color: var(--background, #0b1410) !important; }
+              html[data-special='meshki'] #boot-splash { background-color: var(--background, #000000) !important; }
+              html[data-special='kahkeshani'] #boot-splash { background-color: var(--background, #050817) !important; }
+              html[data-special='kahkeshani-rooz'] #boot-splash { background-color: var(--background, #ffffff) !important; }
+              html.dark #boot-splash .boot-text { color: var(--primary, #37b78a) !important; }
+              body { background-color: var(--background, #f4f8f6); color: #0e1913; margin: 0; }
+              html.dark body { background-color: var(--background, #0b1410); color: #ecefed; }
+              html[data-special='meshki'] body { background-color: var(--background, #000000); color: #f4f4f5; }
+              html[data-special='kahkeshani'] body { background-color: var(--background, #050817); color: #e7eaf6; }
+              html[data-special='kahkeshani-rooz'] body { background-color: var(--background, #ffffff); color: #232946; }
               @font-face {
                 font-family: 'Vazirmatn';
                 src: url('/fonts/Vazirmatn-Light.woff2') format('woff2');

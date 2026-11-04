@@ -50,7 +50,7 @@ import { ACCENTS, SPECIALS, applyAccent, applySpecial, readStoredAccent, readSto
 import { checkNotifPermission, requestNotifPermission, syncInstallmentNotifications, fireTestNotification, notifSupported } from "@/lib/notifications";
 import type { AppSettings, NotifSettings } from "@/lib/client-api";
 
-const APP_VERSION = "۲.۱۴.۳";
+const APP_VERSION = "۲.۱۴.۴";
 
 function ThemeSection() {
   const { theme, setTheme } = useTheme();
@@ -148,10 +148,17 @@ function ThemeSection() {
         {/* تم‌های ویژه */}
         <div>
           <p className="mb-2 text-sm font-medium">تم ویژه</p>
-          <div className="grid grid-cols-3 gap-2">
+          <div className="grid grid-cols-2 gap-2">
             {SPECIALS.map((s) => {
               const active = mounted && special === s.id;
-              const Icon = s.id === "meshki" ? MoonStar : s.id === "kahkeshani" ? Sparkles : RefreshCw;
+              const Icon =
+                s.id === "meshki"
+                  ? MoonStar
+                  : s.id === "kahkeshani"
+                    ? Sparkles
+                    : s.id === "kahkeshani-rooz"
+                      ? Sun
+                      : RefreshCw;
               return (
                 <button
                   key={s.id}
@@ -173,8 +180,10 @@ function ThemeSection() {
           {mounted && special !== "none" && (
             <p className="mt-2 text-xs leading-5 text-muted-foreground">
               {special === "kahkeshani"
-                ? "✨ تم کهکشانی فعال شد — پس‌زمینهٔ ستاره‌باران با ستاره‌های چشمک‌زن به رنگ تم؛ صفحه هم تیره می‌شود."
-                : "⬛ تم مشکی کامل فعال شد — پس‌زمینهٔ کاملاً سیاه (مناسب نمایشگر OLED)؛ صفحه هم تیره می‌شود."}
+                ? "✨ تم کهکشانی شب فعال شد — فضای تیره با ستاره‌های چشمک‌زن به رنگ تم."
+                : special === "kahkeshani-rooz"
+                  ? "☀️ تم کهکشانی روز فعال شد — برعکسِ شب: صفحهٔ سفید با ستاره‌های رنگی به رنگ تم."
+                  : "⬛ تم مشکی کامل فعال شد — پس‌زمینهٔ کاملاً سیاه (مناسب نمایشگر OLED)."}
             </p>
           )}
         </div>

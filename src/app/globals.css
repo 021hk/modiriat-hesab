@@ -159,18 +159,18 @@
 @layer base {
   html {
     color-scheme: light;
-    background-color: #f4f8f6;
+    background-color: var(--background, #f4f8f6);
   }
   html.dark {
     color-scheme: dark;
-    background-color: #0b1410;
+    background-color: var(--background, #0b1410);
   }
   * {
     @apply border-border;
-    outline-color: #00885e;
+    outline-color: var(--ring, #00885e);
   }
   .dark * {
-    outline-color: #37b78a;
+    outline-color: var(--ring, #37b78a);
   }
   body {
     @apply bg-background text-foreground;
@@ -205,7 +205,7 @@
 }
 
 /* ─────────────────────────────────────────────────────────────
-   تم‌های رنگی (v2.14.3) — رنگ اصلی با data-accent روی <html>
+   تم‌های رنگی (v2.14.4) — رنگ اصلی با data-accent روی <html>
    کلاس‌های emerald در Tailwind v4 به var(--color-emerald-...) اشاره می‌کنند؛
    پس بازنویسی همین متغیرها کل برنامه را هم‌رنگ می‌کند.
    ───────────────────────────────────────────────────────────── */
@@ -221,6 +221,7 @@
 
 /* ─── بنفش ─── */
 html[data-accent="banafsh"] {
+  --background: #f7f5fb;
   --primary: #7c3aed;
   --ring: #7c3aed;
   --chart-1: #7c3aed;
@@ -243,6 +244,19 @@ html[data-accent="banafsh"] {
   --color-emerald-950: #2e1065;
 }
 html[data-accent="banafsh"].dark {
+  /* پس‌زمینهٔ بنفشِ تیره — همان حالت «رنگ + مشکی» که سبز پیش‌فرض دارد */
+  --background: #0d0a16;
+  --card: #151022;
+  --popover: #151022;
+  --secondary: #1d1730;
+  --muted: #1d1730;
+  --muted-foreground: #9c94ba;
+  --accent: #241b40;
+  --border: #2a2145;
+  --input: #2a2145;
+  --sidebar: #151022;
+  --sidebar-accent: #1d1730;
+  --sidebar-border: #2a2145;
   --primary: #a78bfa;
   --ring: #a78bfa;
   --chart-1: #a78bfa;
@@ -256,6 +270,7 @@ html[data-accent="banafsh"].dark {
 
 /* ─── آبی ─── */
 html[data-accent="abi"] {
+  --background: #f4f6fc;
   --primary: #2563eb;
   --ring: #2563eb;
   --chart-1: #2563eb;
@@ -278,6 +293,19 @@ html[data-accent="abi"] {
   --color-emerald-950: #172554;
 }
 html[data-accent="abi"].dark {
+  /* پس‌زمینهٔ آبیِ تیره */
+  --background: #090e18;
+  --card: #0f1524;
+  --popover: #0f1524;
+  --secondary: #16203a;
+  --muted: #16203a;
+  --muted-foreground: #8b95b0;
+  --accent: #1b2947;
+  --border: #223054;
+  --input: #223054;
+  --sidebar: #0f1524;
+  --sidebar-accent: #16203a;
+  --sidebar-border: #223054;
   --primary: #60a5fa;
   --ring: #60a5fa;
   --chart-1: #60a5fa;
@@ -291,6 +319,7 @@ html[data-accent="abi"].dark {
 
 /* ─── آسمانی ─── */
 html[data-accent="asemani"] {
+  --background: #f2f8fc;
   --primary: #0284c7;
   --ring: #0284c7;
   --chart-1: #0284c7;
@@ -313,6 +342,19 @@ html[data-accent="asemani"] {
   --color-emerald-950: #082f49;
 }
 html[data-accent="asemani"].dark {
+  /* پس‌زمینهٔ آسمانیِ تیره */
+  --background: #07101a;
+  --card: #0c1826;
+  --popover: #0c1826;
+  --secondary: #122436;
+  --muted: #122436;
+  --muted-foreground: #8496a8;
+  --accent: #16304a;
+  --border: #1c3c58;
+  --input: #1c3c58;
+  --sidebar: #0c1826;
+  --sidebar-accent: #122436;
+  --sidebar-border: #1c3c58;
   --primary: #38bdf8;
   --ring: #38bdf8;
   --chart-1: #38bdf8;
@@ -324,47 +366,64 @@ html[data-accent="asemani"].dark {
   --orb-glow: rgba(14, 165, 233, 0.5);
 }
 
-/* ─── زرد (طلایی/کهربایی) ─── */
+/* ─── زرد خالص (v2.14.4 — قبلاً کهربایی/نارنجی بود) ─── */
 html[data-accent="zard"] {
-  --primary: #b45309;
-  --ring: #b45309;
-  --chart-1: #d97706;
-  --sidebar-primary: #b45309;
-  --orb-hi: #fde68a;
-  --orb-mid: #fbbf24;
-  --orb-deep: #d97706;
-  --orb-dark: #78350f;
-  --orb-glow: rgba(217, 119, 6, 0.45);
-  --color-emerald-50: #fffbeb;
-  --color-emerald-100: #fef3c7;
-  --color-emerald-200: #fde68a;
-  --color-emerald-300: #fcd34d;
-  --color-emerald-400: #fbbf24;
-  --color-emerald-500: #f59e0b;
-  --color-emerald-600: #d97706;
-  --color-emerald-700: #b45309;
-  --color-emerald-800: #92400e;
-  --color-emerald-900: #78350f;
-  --color-emerald-950: #451a03;
+  --background: #fdfaf0;
+  --primary: #eab308;
+  --primary-foreground: #3f2d04;
+  --ring: #eab308;
+  --chart-1: #eab308;
+  --sidebar-primary: #eab308;
+  --sidebar-primary-foreground: #3f2d04;
+  --orb-hi: #fef08a;
+  --orb-mid: #facc15;
+  --orb-deep: #eab308;
+  --orb-dark: #713f12;
+  --orb-glow: rgba(234, 179, 8, 0.5);
+  --color-emerald-50: #fefce8;
+  --color-emerald-100: #fef9c3;
+  --color-emerald-200: #fef08a;
+  --color-emerald-300: #fde047;
+  --color-emerald-400: #facc15;
+  --color-emerald-500: #eab308;
+  --color-emerald-600: #ca8a04;
+  --color-emerald-700: #a16207;
+  --color-emerald-800: #854d0e;
+  --color-emerald-900: #713f12;
+  --color-emerald-950: #422006;
 }
 html[data-accent="zard"].dark {
-  --primary: #fbbf24;
-  --ring: #fbbf24;
-  --chart-1: #fbbf24;
-  --sidebar-primary: #fbbf24;
-  --orb-hi: #fef3c7;
-  --orb-mid: #f59e0b;
-  --orb-deep: #b45309;
-  --orb-dark: #451a03;
-  --orb-glow: rgba(245, 158, 11, 0.5);
+  /* پس‌زمینهٔ زردِ تیره (قهوه‌ای-زرد روی مشکی) */
+  --background: #12100a;
+  --card: #1a170e;
+  --popover: #1a170e;
+  --secondary: #241f12;
+  --muted: #241f12;
+  --muted-foreground: #9b937e;
+  --accent: #2e2817;
+  --border: #3a3220;
+  --input: #3a3220;
+  --sidebar: #1a170e;
+  --sidebar-accent: #241f12;
+  --sidebar-border: #3a3220;
+  --primary: #facc15;
+  --ring: #facc15;
+  --chart-1: #facc15;
+  --sidebar-primary: #facc15;
+  --orb-hi: #fef9c3;
+  --orb-mid: #facc15;
+  --orb-deep: #eab308;
+  --orb-dark: #713f12;
+  --orb-glow: rgba(250, 204, 21, 0.5);
 }
 
 /* ─────────────────────────────────────────────────────────────
    تم‌های ویژهٔ پس‌زمینه (data-special) — بعد از accent تعریف می‌شوند
    ───────────────────────────────────────────────────────────── */
 
-/* مشکی کامل — OLED */
-html[data-special="meshki"] {
+/* مشکی کامل — OLED (با .dark هم می‌آید تا روی پس‌زمینهٔ رنگی اکسنت‌ها برنده شود) */
+html[data-special="meshki"],
+html[data-special="meshki"].dark {
   --background: #000000;
   --foreground: #f4f4f5;
   --card: #0c0c0e;
@@ -386,8 +445,9 @@ html[data-special="meshki"] {
   --sidebar-border: #26262a;
 }
 
-/* کهکشانی — فضای ستاره‌باران */
-html[data-special="kahkeshani"] {
+/* کهکشانی — فضای ستاره‌باران شب */
+html[data-special="kahkeshani"],
+html[data-special="kahkeshani"].dark {
   --background: #050817;
   --foreground: #e7eaf6;
   --card: #0d1330;
@@ -407,6 +467,31 @@ html[data-special="kahkeshani"] {
   --sidebar-accent: #1a2248;
   --sidebar-accent-foreground: #e7eaf6;
   --sidebar-border: #27315e;
+}
+
+/* کهکشانی روزانه (v2.14.4) — معکوسِ شب: صفحهٔ سفید با ستاره‌های رنگی؛
+   ویژگی‌ها حتی با کلاس dark هم روی سفید می‌مانند (اختصاصی‌تر از .dark است) */
+html[data-special="kahkeshani-rooz"],
+html[data-special="kahkeshani-rooz"].dark {
+  --background: #ffffff;
+  --foreground: #232946;
+  --card: #ffffff;
+  --card-foreground: #232946;
+  --popover: #ffffff;
+  --popover-foreground: #232946;
+  --secondary: #f2f4fb;
+  --secondary-foreground: #232946;
+  --muted: #f2f4fb;
+  --muted-foreground: #6d7595;
+  --accent: #edf0fb;
+  --accent-foreground: #2a3160;
+  --border: #e4e7f3;
+  --input: #e4e7f3;
+  --sidebar: #ffffff;
+  --sidebar-foreground: #232946;
+  --sidebar-accent: #f2f4fb;
+  --sidebar-accent-foreground: #232946;
+  --sidebar-border: #e4e7f3;
 }
 
 /* ─── انیمیشن ستاره‌های کهکشان ─── */
