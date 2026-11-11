@@ -4,7 +4,6 @@ import android.content.Intent;
 import android.os.Bundle;
 
 import com.getcapacitor.BridgeActivity;
-import com.getcapacitor.JSObject;
 
 /**
  * MainActivity — v2.16: مقصد Share اندروید
@@ -37,9 +36,10 @@ public class MainActivity extends BridgeActivity {
             if (text == null || text.isEmpty()) return;
             HesabSmsPlugin.setPendingShareText(text);
             if (bridge != null) {
-                JSObject data = new JSObject();
-                data.put("text", text);
-                bridge.triggerJSEvent("hesabShareText", "window", data);
+                // نسخهٔ Bridge این Capacitor فقط triggerJSEvent(String,String,String) دارد —
+                // JSON رشته‌ای به‌عنوان detail در رویداد تزریق می‌شود
+                String payload = new org.json.JSONObject().put("text", text).toString();
+                bridge.triggerJSEvent("hesabShareText", "window", payload);
             }
         } catch (Exception ignored) {
             // خطای Share نباید برنامه را ببندد
