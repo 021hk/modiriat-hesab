@@ -1,4 +1,14 @@
-// ---------- Parser پیامک‌های بانکی (نسخه ۲) ----------
+// ---------- Parser پیامک/نوتیفیکیشن بانکی (نسخه ۲) ----------
+// v2.16: پشتیبانی کامل نوتیفیکیشن بلوبانک (واریز/برداشت/سود) + عبارت‌های قطعی
+// «از حساب شما کم شد» / «به حسابتان واریز شد» + «بابت X» + تاریخ شمسی داخل پیام
+// نمونه واقعی بلو (برداشت):
+//        شارژ شدی
+//        علی عزیز، 220,000 ریال بابت خرید شارژ از حساب شما کم شد
+//        موجودی: 50,025,971 ریال
+//        1405.08.21 02:42
+// نمونه واقعی بلو (واریز):
+//        علی عزیز، 200,000 ریال به حسابتان واریز شد
+//        موجودی: 50,225,971 ریال
 // دو ساختار را پشتیبانی می‌کند:
 // ۱) پیامک‌های کلیدواژه‌دار: «بانک ملت: برداشت مبلغ 500,000 ریال از حساب 1234 بابت خرید»
 // ۲) پیامک‌های ساختاری عددی (بدون کلیدواژه) — نمونه واقعی:
@@ -7,6 +17,8 @@
 //        07/10_02:10
 //        مانده: 66,663,400
 // واحد پول: مبالغ پیامک بانک‌های ایران معمولاً «ریال» است.
+
+import { toGregorian } from "./jalali";
 
 // تبدیل ارقام فارسی/عربی به انگلیسی
 export function normalizeDigits(input: string): string {
@@ -25,6 +37,7 @@ export function normalizeDigits(input: string): string {
 }
 
 const BANK_NAMES: { key: string; patterns: string[] }[] = [
+  { key: "بلوبانک", patterns: ["بلوبانک", "بلو بانک", "blubank", "blu bank", "blu", "بلو"] },
   { key: "ملت", patterns: ["ملت", "BANKMELLAT", "bpm"] },
   { key: "صادرات", patterns: ["صادرات", "BSI"] },
   { key: "ملی", patterns: ["ملی", "ملي", "BMI"] },
@@ -63,6 +76,8 @@ export interface SmsParseResult {
   accountRef: string | null; // شماره کارت/حساب داخل پیامک (برای تطبیق با حساب کاربر)
   accountRefDigits: string | null; // فقط ارقام شناسه (بدون نقطه/خط تیره) — مثل 777888139728721
   cardTail: string | null; // ۴ رقم آخر کارت/حساب
+  purpose: string | null; // دلیل تراکنش از «بابت X» (مثلاً «خرید شارژ»)
+  dateIso: string | null; // تاریخ/ساعت شمسی داخل پیام → ISO (اگر در متن بود)
   confidence: number; // 0..1
 }
 
@@ -77,7 +92,58 @@ function toNumber(raw: string): number {
 }
 
 const INCOME_HINTS = ["واریز", "افزایش موجودی", "دریافت", "وصول", "شارژ", "بستانکار", "واریز به حساب", "deposit", "credited"];
-const EXPENSE_HINTS = ["برداشت", "خرید", "کسر", "پرداخت", "انتقال وجه", "کارت به کارت", "کارمزد", "قبض", "بدهکار", "برداشت از حساب", "withdraw", "debited"];
+const EXPENSE_HINTS = ["برداشت", "خرید", "کسر", "پرداخت", "انتقال وجه", "کارت به کارت", "کارمزد", "قبض", "بدهکار", "برداشت از حساب", "کم شد", "کسر شد", "withdraw", "debited"];
+
+// عبارت‌های قطعی (نوتیفیکیشن بلوبانک و چند بانک دیگر) — از منطق «نزدیک‌ترین کلیدواژه» قوی‌ترند:
+// «... ریال بابت خرید شارژ از حساب شما کم شد» و «... ریال به حسابتان واریز شد»
+// نکته: «شارژ» هم می‌تواند درآمد باشد («حسابت شارژ شد») هم هزینه («خرید شارژ») — عبارت قطعی این ابهام را حل می‌کند
+const STRONG_EXPENSE = [
+  "از حساب شما کم شد",
+  "از حسابتان کم شد",
+  "از حساب‌تان کم شد",
+  "از حسابت کم شد",
+  "از حساب شما برداشت شد",
+  "از حسابتان برداشت شد",
+];
+const STRONG_INCOME = [
+  "به حسابتان واریز شد",
+  "به حساب شما واریز شد",
+  "به حساب‌تان واریز شد",
+  "به حسابت واریز شد",
+];
+
+/** عبارت «بابت X» — دلیل تراکنش (مثلاً «بابت خرید شارژ») — خالص و قابل‌تست */
+export function extractPurpose(text: string): string | null {
+  const m = normalizeDigits(text).match(/بابت\s+([^\n]{2,80}?)(?=\s*(?:از\s+حسا|کم\s+شده?|کسر\s+شده?|ثبت\s+شده?|موجودی|مانده|تاریخ|$))/);
+  const p = m ? m[1].trim().replace(/[،,.\s]+$/, "") : "";
+  return p.length >= 2 ? p.slice(0, 60) : null;
+}
+
+/** تاریخ و ساعت شمسی داخل پیام — «1405.08.21» یا «۱۴۰۵۰۸۲۱» + «02:42» → ISO (خالص و قابل‌تست) */
+export function extractJalaliDateIso(text: string): string | null {
+  // ارقام فارسی/عربی هم خودش نرمال می‌کند — تابع جداگانه است و ممکن است متن خام بگیرد
+  const t0 = normalizeDigits(text);
+  let m = /(?:^|[^\d])(1[2-5]\d{2})[.\/\-](\d{1,2})[.\/\-](\d{1,2})(?:[^\d]|$)/.exec(t0);
+  if (!m) {
+    const c = /(?:^|[^\d])(1[2-5]\d{2})(\d{2})(\d{2})(?:[^\d]|$)/.exec(t0);
+    if (!c) return null;
+    m = c;
+  }
+  const jy = parseInt(m[1], 10);
+  const jm = parseInt(m[2], 10);
+  const jd = parseInt(m[3], 10);
+  if (jm < 1 || jm > 12 || jd < 1 || jd > 31) return null;
+  const t = /(?:^|[^\d])([01]?\d|2[0-3]):([0-5]\d)(?:[^\d]|$)/.exec(t0);
+  const hour = t ? parseInt(t[1], 10) : 12;
+  const minute = t ? parseInt(t[2], 10) : 0;
+  try {
+    const g = toGregorian(jy, jm, jd);
+    if (g.gy < 2020 || g.gy > 2040) return null;
+    return new Date(g.gy, g.gm - 1, g.gd, hour, minute).toISOString();
+  } catch {
+    return null;
+  }
+}
 
 // خط تاریخ مثل: 07/10_02:10 یا 1404/07/10 02:10 یا 2026/10/02
 const DATE_LINE_RE = /^\d{1,4}[\/\-.]\d{1,2}(?:[\/\-.]\d{0,2})?[_\sT]\d{1,2}:\d{2}(?::\d{2})?$/;
@@ -190,6 +256,27 @@ export function parseBankSms(rawText: string): SmsParseResult {
     }
   }
 
+  // ─── عبارت‌های قطعی (نوتیفیکیشن بلوبانک و مشابه) — قبل از منطق کلیدواژهٔ موقعیتی ───
+  let strongType: "income" | "expense" | null = null;
+  for (const p of STRONG_EXPENSE) {
+    if (text.includes(p) || text.replace(/\u200c/g, "").includes(p.replace(/\u200c/g, ""))) {
+      strongType = "expense";
+      break;
+    }
+  }
+  if (!strongType) {
+    for (const p of STRONG_INCOME) {
+      if (text.includes(p) || text.replace(/\u200c/g, "").includes(p.replace(/\u200c/g, ""))) {
+        strongType = "income";
+        break;
+      }
+    }
+  }
+  if (strongType) {
+    type = strongType;
+    typeFromSign = false;
+  }
+
   // ─── نوع از علامت (+/−) ───
   if (sign === "-" && (type === "unknown" || type === "income")) {
     type = "expense";
@@ -237,7 +324,8 @@ export function parseBankSms(rawText: string): SmsParseResult {
     if (bankName) break;
   }
   if (!bankName) {
-    const m3 = text.match(/بانک\s*([\u0600-\u06FFa-zA-Z]+)/);
+    // فاصله/نیم‌فاصله بعد از «بانک» لازم است — وگرنه «سود بانکی» → نام بانک «ی» می‌شد!
+    const m3 = text.match(/بانک[\s\u200c]+([\u0600-\u06FFa-zA-Z]{2,})/);
     if (m3) bankName = m3[1];
   }
 
@@ -298,5 +386,17 @@ export function parseBankSms(rawText: string): SmsParseResult {
   if (bankName) confidence += 0.15;
   if (type !== "unknown" && typeFromSign && !bankName) confidence = Math.max(confidence, 0.85);
 
-  return { type, amount, bankName, balance, unit, accountRef, accountRefDigits, cardTail, confidence };
+  return {
+    type,
+    amount,
+    bankName,
+    balance,
+    unit,
+    accountRef,
+    accountRefDigits,
+    cardTail,
+    purpose: extractPurpose(text),
+    dateIso: extractJalaliDateIso(text),
+    confidence,
+  };
 }

@@ -67,9 +67,17 @@ export function SmsBackgroundSync() {
       // پلاگین در دسترس نیست
     }
 
+    // پیام Share‌شده به برنامه رسید (v2.16) — اطلاع‌رسانی سراسری؛
+    // خود متن در تب «حساب‌ها» ← «ورود پیام بانکی» نشان داده می‌شود
+    const onShare = () => {
+      toast({ title: "پیام بانک دریافت شد", description: "در تب «حساب‌ها» ← «ورود پیام بانکی» نمایش داده می‌شود" });
+    };
+    window.addEventListener("hesabShareText", onShare);
+
     return () => {
       cancelled = true;
       document.removeEventListener("visibilitychange", onVis);
+      window.removeEventListener("hesabShareText", onShare);
       if (timer) clearTimeout(timer);
       try {
         void handle?.remove();

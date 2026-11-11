@@ -19,6 +19,13 @@
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
+            <!-- مقصد Share (v2.16): کاربر پیام بانک (مثلاً بلوبانک) را با حساب‌یار به‌اشتراک می‌گذارد
+                 تا واریز/برداشت خودکار ثبت شود — بدون هیچ مجوز حساسی -->
+            <intent-filter>
+                <action android:name="android.intent.action.SEND" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <data android:mimeType="text/plain" />
+            </intent-filter>
         </activity>
 
         <provider
@@ -31,9 +38,8 @@
     </application>
 
     <!-- Permissions -->
-
+    <!-- v2.16: فقط INTERNET — مجوزهای READ_SMS/RECEIVE_SMS حذف شدند تا گوگل‌پلی و Play Protect
+         برنامه را «خطرناک» علامت نزنند. خواندن پیام بانک حالا با Share کردن پیام به برنامه
+         (بدون مجوز) یا چسباندن متن انجام می‌شود. -->
     <uses-permission android:name="android.permission.INTERNET" />
-    <!-- خواندن خودکار پیامک‌های بانکی -->
-    <uses-permission android:name="android.permission.READ_SMS" />
-    <uses-permission android:name="android.permission.RECEIVE_SMS" />
 </manifest>

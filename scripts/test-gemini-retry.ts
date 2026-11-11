@@ -88,21 +88,73 @@ let flaky = 0;
   check("قطع موقت: دقیقاً ۳ تلاش", flaky, 3);
 }
 
-// حالت ۳: پاسخ HTTP خطا (۴۲۹) — بدون تکرار شبکه، پیام فارسی سقف مصرف
+// حالت ۳: ۴۲۹ سهمیه روی همهٔ مدل‌ها — زنجیره مدل‌های دیگر را هم امتحان می‌کند و پیام سهمیه می‌آید (v2.16)
 let httpCalls = 0;
 (globalThis as { fetch: unknown }).fetch = (async () => {
   httpCalls++;
-  return new Response(JSON.stringify({ error: { message: "quota" } }), { status: 429 });
+  return new Response(JSON.stringify({ error: { message: "You exceeded your current quota, please check your plan and billing details." } }), { status: 429 });
 }) as typeof fetch;
 
 {
+  resetGeminiModelCache();
   const r = await callGemini({ apiKey: "KEYTEST0000000", systemPrompt: "s", history: HIST });
-  check("429: فقط یک فراخوانی", httpCalls, 1);
-  check("429: پیام سقف مصرف", r.ok === false && r.text.includes("زیاد شده"), true);
+  check("429: زنجیره کامل مدل‌ها امتحان شد", httpCalls > 1, true);
+  check("429: پیام سهمیهٔ فارسی", r.ok === false && r.text.includes("سهمیه"), true);
+}
+
+// حالت ۳-ب: ۴۲۹ فقط مدل اول — مدل بعدی سهمیهٔ جداست و باید جواب بدهد (v2.16)
+{
+  resetGeminiModelCache();
+  const qCalled: string[] = [];
+  (globalThis as { fetch: unknown }).fetch = (async (url: string | URL | Request) => {
+    const u = typeof url === "string" ? url : url instanceof URL ? url.href : String(url);
+    if (u.includes(":generateContent")) {
+      const m = /models\/([^:]+):/.exec(u)?.[1] || "";
+      qCalled.push(m);
+      if (m === "gemini-3.8-flash") {
+        return new Response(JSON.stringify({ error: { message: "You exceeded your current quota." } }), { status: 429 });
+      }
+      return new Response(
+        JSON.stringify({ candidates: [{ content: { parts: [{ text: '{"reply":"با مدل بعدی","actions":[]}' }] } }] }),
+        { status: 200, headers: { "Content-Type": "application/json" } }
+      );
+    }
+    return new Response(
+      JSON.stringify({
+        models: [
+          { name: "models/gemini-flash-latest", supportedGenerationMethods: ["generateContent"] },
+          { name: "models/gemini-2.5-flash", supportedGenerationMethods: ["generateContent"] },
+        ],
+      }),
+      { status: 200, headers: { "Content-Type": "application/json" } }
+    );
+  }) as typeof fetch;
+  const r = await callGemini({ apiKey: "KEYQUOTA0000000", systemPrompt: "s", history: HIST });
+  check("429→مدل بعدی: موفق", r.ok, true);
+  check("429→مدل بعدی: پاسخ مدل دوم", r.text.includes("با مدل بعدی"), true);
+  check("429→مدل بعدی: اول 3.8 بعد flash-latest", qCalled[0] === "gemini-3.8-flash" && qCalled[1] === "gemini-flash-latest", true);
 }
 
 (globalThis as { fetch: unknown }).fetch = realFetch;
 resetGeminiModelCache();
+
+// کش مدل بازنشسته هنگام خواندن پاک می‌شود — نسخه‌های قبلی 2.5 را کش کرده بودند و هر بار ۴۰۴ می‌خورد (v2.16)
+try {
+  const ls = (globalThis as { localStorage?: Storage }).localStorage;
+  if (ls) {
+    const { cachedGeminiModel } = await import("../src/lib/ai/gemini");
+    ls.setItem("hesab-yar:gemini-model", "gemini-2.5-flash");
+    check("کش بازنشسته: هنگام خواندن پاک شد", cachedGeminiModel(), null);
+    check("کش بازنشسته: از localStorage هم رفت", ls.getItem("hesab-yar:gemini-model"), null);
+    ls.setItem("hesab-yar:gemini-model", "gemini-3.8-flash");
+    check("کش سالم: دست‌نخورده", cachedGeminiModel(), "gemini-3.8-flash");
+    ls.removeItem("hesab-yar:gemini-model");
+  } else {
+    console.log("ℹ localStorage در این محیط نیست — تست کش بازنشسته رد شد");
+  }
+} catch {
+  console.log("ℹ تست کش بازنشسته رد شد");
+}
 
 // ─── چند کلید API (v2.15) ───
 

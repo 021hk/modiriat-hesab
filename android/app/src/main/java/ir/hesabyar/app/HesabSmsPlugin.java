@@ -34,6 +34,13 @@ public class HesabSmsPlugin extends Plugin {
     private static final String SMS_RECEIVED_ACTION = "android.provider.Telephony.SMS_RECEIVED";
     private BroadcastReceiver incomingReceiver;
 
+    // متن پیام Share‌شده که هنوز به جاوااسکریپت نرسیده (باز شدن سرد برنامه — v2.16)
+    private static volatile String pendingShareText = null;
+
+    public static void setPendingShareText(String text) {
+        pendingShareText = text;
+    }
+
     @Override
     public void load() {
         try {
@@ -96,6 +103,16 @@ public class HesabSmsPlugin extends Plugin {
 
     // checkPermissions و requestPermissions به‌صورت خودکار توسط Capacitor
     // از روی @CapacitorPlugin(permissions=...) فراهم می‌شوند (alias = "sms")
+
+    /** متن پیام Share‌شده را برمی‌گرداند و مصرف می‌کند — برای باز شدن سرد برنامه (v2.16) */
+    @PluginMethod
+    public void consumeSharedText(PluginCall call) {
+        JSObject result = new JSObject();
+        String t = pendingShareText;
+        pendingShareText = null;
+        result.put("text", t == null ? "" : t);
+        call.resolve(result);
+    }
 
     /** باز کردن URL خارجی (مثل دانلود APK نسخه جدید) در مرورگر/برنامه مقصد سیستم */
     @PluginMethod

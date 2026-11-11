@@ -793,11 +793,19 @@ async function createSmsLog(body: Record<string, unknown>): Promise<{ log: SmsLo
     bankName: parsed.bankName,
     parsedType: parsed.type,
     parsedAmount: parsed.amount,
+    parsedDate: parsed.dateIso, // تاریخ/ساعت شمسی داخل پیام (بلوبانک و مشابه) — v2.16
     status: "pending",
     createdAt: nowIso(),
   };
   await dbPut(STORES.smsLogs, log);
   return { log, parsed };
+}
+
+// پیش‌نمایش تشخیص پیام بانک — بدون ذخیره (v2.16: قبلاً فقط روِوت مردهٔ سرور آن را داشت و دکمه کار نمی‌کرد)
+async function parseSmsPreview(body: Record<string, unknown>): Promise<SmsParseResult> {
+  const text = typeof body.text === "string" ? body.text.trim() : "";
+  if (!text) fail("متن پیامک نامعتبر است");
+  return parseBankSms(text);
 }
 
 async function updateSmsLog(id: string, body: Record<string, unknown>): Promise<SmsLog> {
@@ -823,7 +831,9 @@ async function updateSmsLog(id: string, body: Record<string, unknown>): Promise<
       purpose: (body.purpose as string) || null,
       categoryId: autoCategoryId,
       bankAccountId: (body.bankAccountId as string) || null,
-      date: body.date ? new Date(body.date as string).toISOString() : log.createdAt,
+      date: body.date
+        ? new Date(body.date as string).toISOString()
+        : log.parsedDate || log.createdAt, // اولویت: تاریخ داخل پیام (مثل ۱۴۰۵.۰۸.۲۱ بلو) — v2.16
       source: "sms",
       rawSms: log.rawText,
       debtId: null,
@@ -1404,6 +1414,7 @@ export async function localRequest<T>(method: string, url: string, body?: unknow
     };
 
     if (resource === "backup" && m === "POST") handler = table.backup.POST;
+    else if (resource === "sms" && id === "parse" && m === "POST") handler = (q, b) => parseSmsPreview(b);
     else if (resource === "installments" && id === "plan" && !sub && m === "POST") handler = (q, b) => createInstallmentPlan(b);
     else if (resource === "installments" && id === "plan" && sub && m === "DELETE")
       handler = (q) => deletePlanInstallments(sub, q.get("all") === "1"); // ?all=1 → حذف کامل حتی پرداخت‌شده‌ها

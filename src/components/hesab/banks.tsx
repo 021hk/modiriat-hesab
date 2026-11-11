@@ -39,7 +39,6 @@ import {
   Landmark,
   Wallet,
   MessageSquareText,
-  MessagesSquare,
   Stethoscope,
   Inbox,
   Download,
@@ -49,9 +48,6 @@ import {
   BadgeCheck,
   BellRing,
   ShieldCheck,
-  ShieldAlert,
-  RefreshCw,
-  Loader2,
 } from "lucide-react";
 import { api, type BankAccount, type SmsLog, type Transaction } from "@/lib/client-api";
 import {
@@ -64,27 +60,32 @@ import {
   toStoredAmount,
 } from "@/lib/format";
 import {
-  HesabSms,
   isNativeAndroid,
-  getSmsPermission,
-  requestSmsPermission,
-  readInboxSince,
-  type SmsPermState,
-  type NativeSms,
+  consumeSharedText,
 } from "@/lib/native-sms";
-import { syncBankSms, getLastSmsSync, judgeSms, type SmsSyncResult, type SmsSyncVerdict } from "@/lib/sms-sync";
-import { parseConfiguredSenders, senderMatches, normalizeSender } from "@/lib/sms-match";
+import { judgeSms, type SmsSyncVerdict } from "@/lib/sms-sync";
+import { parseConfiguredSenders, senderMatches } from "@/lib/sms-match";
 import { parseBankSms } from "@/lib/sms-parser";
-import { getMeta, setMeta } from "@/lib/local-db";
-import type { PluginListenerHandle } from "@capacitor/core";
 
 const BANKS = [
   "ملت", "صادرات", "ملی", "تجارت", "پارسیان", "پاسارگاد", "سامان", "کشاورزی",
+  "بلوبانک", "خاورمیانه", "مهر ایران", "ایران زمین", "حکمت ایرانیان", "گردشگری", "کوثر", "مهر اقتصاد",
   "مسکن", "سپه", "صنعت و معدن", "اقتصاد نوین", "کارآفرین", "سینا", "دی", "پست بانک",
   "شهر", "آینده", "انصار", "قوامین", "رسالت", "رفاه", "توسعه صادرات", "سایر",
 ];
 
 const COLORS = ["#8b5cf6", "#10b981", "#f59e0b", "#ef4444", "#06b6d4", "#ec4899", "#84cc16", "#f97316"];
+
+/** رنگ با شفافیت — برای رنگ‌آمیزی کل کارت حساب با رنگ انتخابی (v2.16)
+ *  کارت حساب‌ها رنگ پس‌زمینهٔ ملایم همان رنگ حساب می‌گیرند — در روشن و تیره خوانا */
+function withAlpha(hex: string | null | undefined, alpha: number): string {
+  const h = String(hex || "").replace("#", "");
+  if (!/^[0-9a-fA-F]{6}$/.test(h)) return `rgba(16,185,129,${alpha})`;
+  const r = parseInt(h.slice(0, 2), 16);
+  const g = parseInt(h.slice(2, 4), 16);
+  const b = parseInt(h.slice(4, 6), 16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
 
 function AccountDialog({
   open,
@@ -186,7 +187,7 @@ function AccountDialog({
             <Input dir="ltr" className="text-left" placeholder="IR..." value={iban} onChange={(e) => setIban(e.target.value)} />
           </div>
           <div className="grid gap-2">
-            <Label>شماره(های) فرستنده پیامک بانک (برای خواندن خودکار)</Label>
+            <Label>شماره(های) فرستنده پیامک بانک (اختیاری — برای تفکیک)</Label>
             <div className="flex gap-2">
               <Input
                 dir="ltr"
@@ -227,7 +228,7 @@ function AccountDialog({
               </div>
             )}
             <p className="text-xs text-muted-foreground leading-5">
-              فقط پیامک‌های همین شماره‌ها خوانده می‌شود — هر چند شماره که بانک استفاده می‌کند اضافه کنید (شماره فرستنده را از خود پیامک ببینید).
+              شماره فرستنده در ابزار «عیب‌یابی پیامک» برای تفکیک شماره بانک از پیامک شخصی استفاده می‌شود — هر چند شماره که بانک استفاده می‌کند اضافه کنید (شماره فرستنده را از خود پیام ببینید).
               اگر چند حساب در یک بانک دارید، شماره حساب/کارت هر حساب را دقیق وارد کنید تا پیامک‌ها تفکیک شوند.
             </p>
           </div>
@@ -281,240 +282,6 @@ const toFa = (n: number) => {
     return String(n);
   }
 };
-
-// ─── کشف شماره‌های فرستنده واقعی روی گوشی ───
-// کاربر معمولاً شماره فرستنده پیامک بانکش را نمی‌داند؛ این دیالوگ صندوق ورودی را می‌خواند،
-// پیامک‌ها را بر اساس فرستنده گروه می‌کند و با یک لمس می‌توان شماره را به حساب وصل کرد.
-interface SenderGroup {
-  raw: string; // نمونه اصلی فرستنده (پرتکرارترین شکل)
-  norm: string; // شکل نرمال‌شده برای گروه‌بندی
-  count: number;
-  latestBody: string;
-  latestDate: number;
-  messages: NativeSms[]; // ۱۰ پیامک آخر (جدیدترین اول) — برای بررسی تک‌تک در دیالوگ
-}
-
-function groupInboxBySender(messages: NativeSms[]): SenderGroup[] {
-  const map = new Map<string, SenderGroup>();
-  for (const m of messages) {
-    const raw = String(m.sender || "").trim();
-    if (!raw) continue;
-    const norm = normalizeSender(raw);
-    if (!norm) continue;
-    const cur = map.get(norm);
-    if (cur) {
-      cur.count++;
-      if (m.date > cur.latestDate) {
-        cur.latestDate = m.date;
-        cur.latestBody = m.body || "";
-        if (raw.length >= cur.raw.length) cur.raw = raw;
-      }
-    } else {
-      map.set(norm, { raw, norm, count: 1, latestBody: m.body || "", latestDate: m.date, messages: [] });
-    }
-  }
-  // ۱۰ پیامک آخر هر فرستنده (جدیدترین اول) برای نمایش حکم تک‌تک
-  for (const g of map.values()) {
-    g.messages = messages
-      .filter((m) => normalizeSender(String(m.sender || "").trim()) === g.norm)
-      .sort((a, b) => b.date - a.date)
-      .slice(0, 10);
-  }
-  return [...map.values()].sort((a, b) => b.count - a.count);
-}
-
-function SenderPickerDialog({
-  open,
-  onOpenChange,
-  accounts,
-}: {
-  open: boolean;
-  onOpenChange: (v: boolean) => void;
-  accounts: BankAccount[];
-}) {
-  const { toast } = useToast();
-  const qc = useQueryClient();
-  const [loading, setLoading] = useState(false);
-  const [loadError, setLoadError] = useState<string | null>(null);
-  const [groups, setGroups] = useState<SenderGroup[]>([]);
-  const [attachFor, setAttachFor] = useState<string | null>(null); // norm شماره‌ای که انتخاب حساب برایش باز است
-  const [pickedAccount, setPickedAccount] = useState("");
-  const [expanded, setExpanded] = useState<string | null>(null); // norm گروهی که پیامک‌هایش تک‌تک بررسی می‌شود
-
-  const configured = accounts.flatMap((a) => parseConfiguredSenders(a.smsSender));
-
-  const loadInbox = useCallback(async () => {
-    setLoading(true);
-    setLoadError(null);
-    try {
-      const since = Date.now() - 30 * 24 * 60 * 60 * 1000;
-      const msgs = await readInboxSince(since, 500);
-      setGroups(groupInboxBySender(msgs));
-    } catch (e) {
-      setLoadError(String(e));
-    } finally {
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    if (open && isNativeAndroid()) void loadInbox();
-    if (!open) {
-      setAttachFor(null);
-      setPickedAccount("");
-    }
-  }, [open, loadInbox]);
-
-  const attachMutation = useMutation({
-    mutationFn: async ({ accountId, sender }: { accountId: string; sender: string }) => {
-      const acc = accounts.find((a) => a.id === accountId);
-      if (!acc) throw new Error("حساب پیدا نشد");
-      const list = parseConfiguredSenders(acc.smsSender);
-      if (!list.some((s) => normalizeSender(s) === normalizeSender(sender))) list.push(sender);
-      return api.put(`/api/bank-accounts/${accountId}`, { smsSender: list.join(",") });
-    },
-    onSuccess: () => {
-      qc.invalidateQueries({ queryKey: ["bank-accounts"] });
-      toast({ title: "شماره فرستنده به حساب اضافه شد — حالا پیامک‌های همان شماره خوانده می‌شود" });
-      setAttachFor(null);
-      setPickedAccount("");
-    },
-    onError: (e: Error) => toast({ title: "خطا", description: e.message, variant: "destructive" }),
-  });
-
-  return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
-      {/* تمام‌صفحه در موبایل — قبلاً فضای دیالوگ تنگ بود و نوشته‌ها روی هم می‌افتادند */}
-      <DialogContent
-        className="h-[100dvh] w-full max-w-none overflow-y-auto rounded-none sm:h-auto sm:max-h-[88dvh] sm:max-w-xl sm:rounded-2xl"
-        dir="rtl"
-      >
-        <DialogHeader>
-          <DialogTitle className="flex items-center gap-2">
-            <MessagesSquare className="h-5 w-5 text-emerald-700" />
-            شماره‌های فرستنده پیامک روی گوشی
-          </DialogTitle>
-        </DialogHeader>
-        <p className="text-xs leading-5 text-muted-foreground">
-          این فهرست، فرستنده‌های واقعی پیامک‌های ۳۰ روز اخیر گوشی شماست. اگر شماره‌ای که بانک‌تان با آن پیامک می‌دهد در این لیست نیست و «تنظیم شده» هم نیست، روی «افزودن به حساب» بزنید تا پیامک‌های همان شماره خوانده شود.
-        </p>
-        {loading ? (
-          <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
-            <Loader2 className="h-5 w-5 animate-spin" /> در حال خواندن صندوق پیامک...
-          </div>
-        ) : loadError ? (
-          <div className="space-y-2 py-4 text-center">
-            <p className="text-sm text-red-600">خطا در خواندن پیامک‌ها</p>
-            <p className="text-xs text-muted-foreground">دسترسی پیامک باید فعال باشد</p>
-            <Button size="sm" variant="outline" onClick={() => void loadInbox()}>تلاش دوباره</Button>
-          </div>
-        ) : groups.length === 0 ? (
-          <p className="py-6 text-center text-sm text-muted-foreground">پیامکی در ۳۰ روز اخیر پیدا نشد</p>
-        ) : (
-          <div className="max-h-[58dvh] space-y-1.5 overflow-y-auto">
-            {groups.slice(0, 50).map((g) => {
-              const isConfigured = senderMatches(g.raw, configured);
-              const isPersonal = /^(\+?98|0)?9\d{9}$/.test(g.raw.replace(/\s/g, "")) && g.raw.replace(/\D/g, "").length === 11;
-              return (
-                <div key={g.norm} className="rounded-xl border p-2.5">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span dir="ltr" className="shrink-0 font-bold">{g.raw}</span>
-                      <Badge variant="secondary" className="shrink-0">{toFa(g.count)} پیامک</Badge>
-                      {isPersonal && <span className="shrink-0 text-[10px] text-muted-foreground">(شخصی)</span>}
-                    </div>
-                    {isConfigured ? (
-                      <Badge className="shrink-0 bg-emerald-100 text-emerald-800 hover:bg-emerald-100 dark:bg-emerald-900/50 dark:text-emerald-300">
-                        <CheckCheck className="ml-1 h-3 w-3" /> تنظیم شده
-                      </Badge>
-                    ) : attachFor === g.norm ? (
-                      <div className="flex w-full flex-wrap items-center gap-1 sm:w-auto">
-                        <Select value={pickedAccount} onValueChange={setPickedAccount}>
-                          <SelectTrigger className="h-8 w-[130px] text-xs">
-                            <SelectValue placeholder="انتخاب حساب" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {accounts.map((a) => (
-                              <SelectItem key={a.id} value={a.id}>{a.name}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                        <Button
-                          size="sm"
-                          className="h-8 bg-emerald-700 px-2 text-xs hover:bg-emerald-800"
-                          disabled={!pickedAccount || attachMutation.isPending}
-                          onClick={() => attachMutation.mutate({ accountId: pickedAccount, sender: g.raw })}
-                        >
-                          ثبت
-                        </Button>
-                        <Button size="sm" variant="ghost" className="h-8 px-2 text-xs" onClick={() => { setAttachFor(null); setPickedAccount(""); }}>
-                          انصراف
-                        </Button>
-                      </div>
-                    ) : (
-                      <Button size="sm" variant="outline" className="h-8 shrink-0 text-xs" onClick={() => setAttachFor(g.norm)}>
-                        <Plus className="ml-1 h-3 w-3" /> افزودن به حساب
-                      </Button>
-                    )}
-                  </div>
-                  {g.latestBody && (
-                    <p className="mt-1.5 line-clamp-1 text-[11px] leading-4 text-muted-foreground" dir="rtl">
-                      {g.latestBody}
-                    </p>
-                  )}
-                  {/* بررسی تک‌تک پیامک‌های همین فرستنده — کاربر می‌بیند هر پیامک چه حکمی می‌گیرد */}
-                  <div className="mt-1.5">
-                    <button
-                      type="button"
-                      className="text-[11px] font-medium text-emerald-700 hover:underline dark:text-emerald-400"
-                      onClick={() => setExpanded(expanded === g.norm ? null : g.norm)}
-                    >
-                      {expanded === g.norm ? "بستن بررسی پیامک‌ها ▲" : "چرا ثبت نمی‌شود؟ بررسی تک‌تک پیامک‌ها ▼"}
-                    </button>
-                    {expanded === g.norm && (
-                      <div className="mt-2 space-y-1.5 border-t pt-2">
-                        {g.messages.map((m) => {
-                          const j = judgeSms({ sender: g.raw, text: (m.body || "").trim(), accounts, autoImport: true });
-                          const vmj = VERDICT_META[j.verdict];
-                          const p = (m.body || "").trim() ? parseBankSms(m.body.trim()) : null;
-                          return (
-                            <div key={m.id} className="rounded-lg border bg-muted/30 p-2">
-                              <div className="flex items-center justify-between gap-2">
-                                <span className="shrink-0 text-[10px] text-muted-foreground">{new Date(m.date).toLocaleString("fa-IR")}</span>
-                                <span className={`shrink-0 rounded-md border px-1.5 py-0.5 text-[10px] font-medium ${vmj.cls}`}>{vmj.label}</span>
-                              </div>
-                              <p className="mt-1 line-clamp-2 text-[11px] leading-4" dir="rtl">{m.body}</p>
-                              <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground">
-                                {p?.amount ? (
-                                  <span>
-                                    مبلغ: <span className="font-bold tabular-nums-persian">{formatMoneyU(p.unit === "toman" ? p.amount * 10 : p.amount)}</span>
-                                    {p.unit === "toman" ? " (تومان×۱۰)" : ""}
-                                  </span>
-                                ) : (
-                                  <span>مبلغ: تشخیص نشد</span>
-                                )}
-                                {p?.balance != null && <span>مانده: <span className="font-bold tabular-nums-persian">{formatMoneyU(p.balance)}</span></span>}
-                                {p?.type !== "unknown" && p && <span>{p.type === "income" ? "واریز ↑" : "برداشت ↓"}</span>}
-                                {j.accountId && <span>حساب: {accounts.find((a) => a.id === j.accountId)?.name || "?"}</span>}
-                              </div>
-                            </div>
-                          );
-                        })}
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)}>بستن</Button>
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
-  );
-}
 
 // ─── عیب‌یابی پیامک: شماره فرستنده + متن پیامک → نتیجه کامل تشخیص ───
 const VERDICT_META: Record<SmsSyncVerdict, { label: string; cls: string }> = {
@@ -633,243 +400,41 @@ function SmsDiagnostic({ accounts }: { accounts: BankAccount[] }) {
   );
 }
 
-// ─── خواندن خودکار پیامک‌های بانکی (فقط اندروید) ───
-function SmsAutoSync({ accounts }: { accounts: BankAccount[] }) {
-  const { toast } = useToast();
-  const qc = useQueryClient();
-  const [mounted, setMounted] = useState(false);
-  const [perm, setPerm] = useState<SmsPermState | null>(null);
-  const [syncing, setSyncing] = useState(false);
-  const [lastSync, setLastSync] = useState(0);
-  const [autoImport, setAutoImport] = useState(true);
-  const [lastResult, setLastResult] = useState<SmsSyncResult | null>(null);
-  const [pickerOpen, setPickerOpen] = useState(false);
-
-  const syncingRef = useRef(false);
-  const optsRef = useRef({ autoImport: true });
-  useEffect(() => {
-    optsRef.current = { autoImport };
-  }, [autoImport]);
-
-  const runSync = useCallback(
-    async (silent: boolean) => {
-      if (syncingRef.current) return;
-      syncingRef.current = true;
-      setSyncing(true);
-      try {
-        const res = await syncBankSms({ ...optsRef.current });
-        setLastResult(res);
-        setLastSync(await getLastSmsSync());
-        qc.invalidateQueries({ queryKey: ["sms-logs"] });
-        qc.invalidateQueries({ queryKey: ["transactions"] });
-        qc.invalidateQueries({ queryKey: ["stats"] });
-        if (res.ok) {
-          const parts: string[] = [];
-          if (res.imported > 0) parts.push(`${toFa(res.imported)} تراکنش خودکار ثبت شد`);
-          if (res.balanceUpdated > 0) parts.push(`موجودی ${toFa(res.balanceUpdated)} حساب از پیامک بانک به‌روز شد`);
-          if (res.queued > 0) parts.push(`${toFa(res.queued)} پیامک در صف بررسی است`);
-          if (res.skippedForeign > 0) parts.push(`${toFa(res.skippedForeign)} پیامک متعلق به حساب دیگری بود و نادیده گرفته شد`);
-          if (res.skippedSender > 0) parts.push(`${toFa(res.skippedSender)} پیامک از شماره‌های ناهمسان نادیده شد`);
-          const desc = parts.length > 0 ? parts.join(" — ") : "پیامک بانکی جدیدی نبود";
-          if (!silent || res.imported > 0 || res.queued > 0) {
-            toast({ title: "پیامک‌ها بررسی شد", description: desc });
-          }
-        } else if (!silent && res.reason === "no_senders") {
-          toast({
-            title: "شماره فرستنده پیامک تنظیم نشده است",
-            description: "در ویرایش هر حساب بانکی، شماره فرستنده پیامک آن بانک را وارد کنید تا فقط پیامک‌های همان شماره خوانده شود",
-            variant: "destructive",
-          });
-        } else if (!silent && res.reason === "permission") {
-          toast({ title: "دسترسی پیامک داده نشده است", variant: "destructive" });
-        } else if (!silent && res.reason === "error") {
-          toast({ title: "خطا در خواندن پیامک‌ها", variant: "destructive" });
-        }
-      } catch {
-        if (!silent) toast({ title: "خطا در همگام‌سازی", variant: "destructive" });
-      } finally {
-        syncingRef.current = false;
-        setSyncing(false);
-      }
-    },
-    [qc, toast]
-  );
-
-  // بارگذاری اولیه + sync خودکار در باز شدن تب
-  useEffect(() => {
-    if (!isNativeAndroid()) return;
-    setMounted(true);
-    void (async () => {
-      const [p, ls, ai] = await Promise.all([
-        getSmsPermission(),
-        getLastSmsSync(),
-        getMeta<boolean>("smsAutoImport"),
-      ]);
-      setPerm(p);
-      setLastSync(ls || 0);
-      if (ai === false) setAutoImport(false);
-      if (p === "granted") void runSync(true);
-    })();
-  }, [runSync]);
-
-  // گوش دادن به پیامک زنده (وقتی برنامه باز است)
-  useEffect(() => {
-    if (!isNativeAndroid()) return;
-    let handle: PluginListenerHandle | null = null;
-    let timer: ReturnType<typeof setTimeout> | null = null;
-    HesabSms.addListener("smsReceived", () => {
-      if (timer) clearTimeout(timer);
-      timer = setTimeout(() => void runSync(true), 3000);
-    })
-      .then((h) => {
-        handle = h;
-      })
-      .catch(() => {});
-    return () => {
-      if (timer) clearTimeout(timer);
-      void handle?.remove();
-    };
-  }, [runSync]);
-
-  const askPermission = async () => {
-    const p = await requestSmsPermission();
-    setPerm(p);
-    if (p === "granted") {
-      toast({ title: "دسترسی پیامک فعال شد" });
-      void runSync(false);
-    } else if (p === "denied") {
-      toast({
-        title: "دسترسی رد شد",
-        description: "از تنظیمات گوشی ← برنامه‌ها ← حساب‌یار ← مجوزها، دسترسی پیامک را فعال کنید",
-        variant: "destructive",
-      });
-    }
-  };
-
-  if (!mounted || perm === null) return null;
-
+// ─── راهنمای ثبت پیام بانک (v2.16) ───
+// خواندن مستقیم پیامک (مجوز READ_SMS/RECEIVE_SMS) حذف شد تا گوگل‌پلی و Play Protect
+// برنامه را «خطرناک» علامت نزنند. مسیر جایگزین بدون هیچ مجوزی: Share کردن پیام/نوتیفیکیشن
+// بانک (مثلاً بلوبانک) به حساب‌یار، یا کپی و چسباندن در «ورود پیام بانکی».
+function SmsGuideCard() {
   return (
     <Card>
       <CardHeader className="pb-2">
         <CardTitle className="flex items-center gap-2 text-base">
           <BellRing className="h-4 w-4 text-emerald-700" />
-          خواندن خودکار پیامک بانکی
+          ثبت پیام بانک — واریز و برداشت خودکار
         </CardTitle>
       </CardHeader>
-      <CardContent className="space-y-3">
-        {perm !== "granted" ? (
-          <div className="flex items-start gap-3 rounded-xl border bg-amber-50 p-3 dark:bg-amber-950/30">
-            <ShieldAlert className="mt-0.5 h-5 w-5 shrink-0 text-amber-600" />
-            <div className="space-y-2">
-              <p className="text-xs leading-5">
-                برای ثبت خودکار واریز و برداشت، برنامه باید پیامک‌های بانکی را بخواند.
-                هیچ داده‌ای از گوشی شما خارج نمی‌شود و همه‌چیز روی خود دستگاه ذخیره می‌شود.
-              </p>
-              <Button size="sm" onClick={askPermission} className="bg-emerald-700 hover:bg-emerald-800">
-                <ShieldCheck className="ml-1 h-4 w-4" /> اجازه دسترسی به پیامک‌ها
-              </Button>
-            </div>
+      <CardContent className="space-y-2">
+        <div className="flex items-start gap-3 rounded-xl border border-emerald-300 bg-emerald-50 p-3 dark:border-emerald-500/40 dark:bg-emerald-950/40">
+          <ShieldCheck className="mt-0.5 h-5 w-5 shrink-0 text-emerald-600" />
+          <div className="space-y-1 text-xs leading-5">
+            <p>
+              پیام یا نوتیفیکیشن واریز/برداشت بانک (مثل <span className="font-bold">بلوبانک</span>) را کپی کنید و در کادر
+              «ورود پیام بانکی» پایین بچسبانید — نوع تراکنش، مبلغ، بانک، بابت و موجودی به‌طور خودکار تشخیص داده می‌شود
+              و تراکنش به همان حساب بانکی وصل می‌شود.
+            </p>
+            <p className="text-muted-foreground">
+              در اندروید می‌توانید از داخل برنامهٔ پیامک یا بلوبانک روی پیام <span className="font-bold">Share</span> بزنید و
+              «حساب‌یار» را انتخاب کنید — پیام همین‌جا باز می‌شود.
+            </p>
+            <p className="text-muted-foreground">
+              برای امنیت بیشتر، برنامه دیگر پیامک‌ها را مستقیم نمی‌خواند (بدون هیچ مجوز حساسی — تأیید گوگل‌پلی و Play Protect).
+            </p>
           </div>
-        ) : (
-          <>
-            <div className="flex items-center justify-between gap-2">
-              <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <ShieldCheck className="h-4 w-4 text-emerald-600" />
-                <span>دسترسی فعال — {lastSync > 0 ? `آخرین بررسی: ${new Date(lastSync).toLocaleString("fa-IR")}` : "هنوز بررسی نشده"}</span>
-              </div>
-              <div className="flex shrink-0 gap-1.5">
-                <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => setPickerOpen(true)}>
-                  <MessagesSquare className="ml-1 h-3 w-3" />
-                  شماره‌های روی گوشی
-                </Button>
-                <Button size="sm" variant="outline" className="h-7 text-xs" disabled={syncing} onClick={() => void runSync(false)}>
-                  <RefreshCw className={`ml-1 h-3 w-3 ${syncing ? "animate-spin" : ""}`} />
-                  {syncing ? "در حال بررسی..." : "بررسی الان"}
-                </Button>
-              </div>
-            </div>
-            {/* شفاف‌سازی: اگر پیامک‌هایی از شماره‌های ناهمسان رد شد، کاربر باید بداند */}
-            {lastResult?.ok && lastResult.bankCount === 0 && lastResult.skippedSender > 0 && (
-              <div className="flex items-start justify-between gap-2 rounded-xl border border-amber-300 bg-amber-50 p-3 dark:border-amber-500/40 dark:bg-amber-950/40">
-                <p className="text-xs leading-5 text-amber-900 dark:text-amber-200">
-                  {toFa(lastResult.skippedSender)} پیامک روی گوشی بود ولی شماره فرستنده‌اش با شماره‌های تنظیم‌شده نمی‌خواند —
-                  احتمالاً شماره فرستنده بانک چیز دیگری است.
-                </p>
-                <Button size="sm" variant="outline" className="h-7 shrink-0 text-xs" onClick={() => setPickerOpen(true)}>
-                  دیدن شماره‌ها
-                </Button>
-              </div>
-            )}
-            {/* گزارش همگام‌سازی — همیشه نمایان، تا کاربر ببیند بررسی واقعاً انجام شده یا نه */}
-            {lastResult && !lastResult.ok && (
-              <div className="rounded-xl border border-red-300 bg-red-50 p-3 text-xs leading-5 text-red-900 dark:border-red-500/40 dark:bg-red-950/40 dark:text-red-200">
-                <div className="font-bold">بررسی پیامک‌ها انجام نشد</div>
-                <div className="mt-0.5">
-                  {lastResult.reason === "no_senders"
-                    ? "هنوز هیچ شماره فرستنده‌ای به حساب‌ها وصل نشده — دکمه «شماره‌های روی گوشی» را بزنید و شماره بانک را به حساب اضافه کنید."
-                    : lastResult.reason === "permission"
-                      ? "دسترسی پیامک فعال نیست — دسترسی را از گوشی اجازه دهید."
-                      : lastResult.reason === "not_native"
-                        ? "این قابلیت فقط در اپ اندروید (APK) کار می‌کند."
-                        : "خطا در خواندن صندوق پیامک — دوباره تلاش کنید."}
-                </div>
-              </div>
-            )}
-            {lastResult?.ok && (
-              <div className="grid grid-cols-3 gap-2 rounded-xl border bg-muted/40 p-3 text-center text-xs sm:grid-cols-4">
-                <div>
-                  <div className="text-muted-foreground">خوانده‌شده</div>
-                  <div className="font-bold tabular-nums-persian">{toFa(lastResult.total)}</div>
-                </div>
-                <div>
-                  <div className="text-muted-foreground">پیامک بانکی</div>
-                  <div className="font-bold tabular-nums-persian">{toFa(lastResult.bankCount)}</div>
-                </div>
-                <div>
-                  <div className="text-muted-foreground">ثبت خودکار</div>
-                  <div className="font-bold tabular-nums-persian text-emerald-700 dark:text-emerald-400">{toFa(lastResult.imported)}</div>
-                </div>
-                <div>
-                  <div className="text-muted-foreground">در صف بررسی</div>
-                  <div className="font-bold tabular-nums-persian text-amber-600">{toFa(lastResult.queued)}</div>
-                </div>
-                <div>
-                  <div className="text-muted-foreground">موجودی به‌روز شد</div>
-                  <div className="font-bold tabular-nums-persian text-emerald-700 dark:text-emerald-400">{toFa(lastResult.balanceUpdated)}</div>
-                </div>
-                <div>
-                  <div className="text-muted-foreground">شماره ناهمسان</div>
-                  <div className="font-bold tabular-nums-persian">{toFa(lastResult.skippedSender)}</div>
-                </div>
-                <div>
-                  <div className="text-muted-foreground">حساب غریبه</div>
-                  <div className="font-bold tabular-nums-persian">{toFa(lastResult.skippedForeign)}</div>
-                </div>
-              </div>
-            )}
-            <div className="flex items-center justify-between rounded-xl border p-3">
-              <div className="pl-3">
-                <div className="text-sm font-medium">ثبت خودکار تراکنش‌ها</div>
-                <p className="text-[11px] leading-4 text-muted-foreground">
-                  پیامک‌های واریز/برداشت با مبلغ واضح، بدون دست وارد شوند؛ موارد نامطمئن در صف بررسی می‌مانند
-                </p>
-              </div>
-              <Switch
-                checked={autoImport}
-                onCheckedChange={(v) => {
-                  setAutoImport(v);
-                  void setMeta("smsAutoImport", v);
-                }}
-              />
-            </div>
-          </>
-        )}
+        </div>
       </CardContent>
-      {perm === "granted" && <SenderPickerDialog open={pickerOpen} onOpenChange={setPickerOpen} accounts={accounts} />}
     </Card>
   );
 }
-
 function SmsSection({ accounts }: { accounts: BankAccount[] }) {
   const { toast } = useToast();
   const qc = useQueryClient();
@@ -929,13 +494,51 @@ function SmsSection({ accounts }: { accounts: BankAccount[] }) {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["sms-logs"] }),
   });
 
+  // ─── دریافت پیام Share‌شده از اندروید (v2.16) ───
+  // سرد: متن هنگام باز شدن برنامه از پلاگین خوانده می‌شود؛ گرم: رویداد window می‌آید
+  useEffect(() => {
+    const applyText = (t: string) => {
+      const v = String(t || "").trim();
+      if (!v) return;
+      setText(v);
+      try {
+        const p = parseBankSms(v);
+        setPreview({ type: p.type, amount: p.amount, bankName: p.bankName, confidence: p.confidence });
+        if (p.confidence < 0.55) {
+          toast({ title: "تشخیص نامطمئن", description: "نوع یا مبلغ کاملاً مشخص نشد — بررسی کنید و «افزودن به صف» را بزنید.", variant: "destructive" });
+        } else {
+          toast({ title: "پیام بانک دریافت شد", description: "نوع و مبلغ تشخیص داده شد — «افزودن به صف» را بزنید." });
+        }
+      } catch {
+        // ignore
+      }
+    };
+    void (async () => {
+      if (isNativeAndroid()) {
+        try {
+          const r = await consumeSharedText();
+          if (r?.text) applyText(r.text);
+        } catch {
+          // ignore
+        }
+      }
+    })();
+    const onShare = (e: Event) => {
+      const t = (e as CustomEvent<{ text?: string }>).detail?.text;
+      if (t) applyText(t);
+    };
+    window.addEventListener("hesabShareText", onShare);
+    return () => window.removeEventListener("hesabShareText", onShare);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   const pending = (logs || []).filter((l) => l.status === "pending");
   const processed = (logs || []).filter((l) => l.status !== "pending");
 
   return (
     <div className="space-y-4">
-      {/* خواندن خودکار پیامک (فقط در اپ اندروید نمایش داده می‌شود) */}
-      <SmsAutoSync accounts={accounts} />
+      {/* راهنمای ثبت پیام بانک — بدون مجوز (v2.16) */}
+      <SmsGuideCard />
 
       {/* عیب‌یابی پیامک — چرا شناسایی نشد؟ */}
       <SmsDiagnostic accounts={accounts} />
@@ -950,14 +553,14 @@ function SmsSection({ accounts }: { accounts: BankAccount[] }) {
         </CardHeader>
         <CardContent className="space-y-3">
           <p className="text-xs leading-5 text-muted-foreground">
-            پیامک واریز یا برداشت بانک را کپی و اینجا بچسبانید. نرم‌افزار به‌طور خودکار نوع (واریز/برداشت)، مبلغ و نام بانک را تشخیص می‌دهد.
-            در نسخه اندروید، پیامک‌ها به‌صورت خودکار خوانده و وارد می‌شوند.
+            پیام یا نوتیفیکیشن واریز/برداشت بانک (مثلاً بلوبانک) را کپی و اینجا بچسبانید — یا در اندروید روی پیام Share بزنید و حساب‌یار را انتخاب کنید.
+            نوع (واریز/برداشت)، مبلغ، بانک، بابت و موجودی به‌طور خودکار تشخیص داده می‌شود و تاریخ شمسی داخل پیام هم به تراکنش اعمال می‌شود.
           </p>
           <textarea
             dir="rtl"
             rows={3}
             className="w-full rounded-xl border bg-background p-3 text-sm outline-none focus:ring-2 focus:ring-[rgba(5,150,105,0.4)]"
-            placeholder="مثال: بانک ملت: برداشت مبلغ 500,000 ریال از حساب 1234 بابت خرید"
+            placeholder="مثال بلوبانک: علی عزیز، 220,000 ریال بابت خرید شارژ از حساب شما کم شد — موجودی: 50,025,971 ریال"
             value={text}
             onChange={(e) => setText(e.target.value)}
           />
@@ -1026,7 +629,7 @@ function SmsSection({ accounts }: { accounts: BankAccount[] }) {
                     {log.sender && <span dir="ltr" className="text-muted-foreground">• از {log.sender}</span>}
                   </div>
                   <div className="flex gap-1">
-                    <Button size="sm" className="h-7 bg-emerald-700 text-xs hover:bg-emerald-800" onClick={() => { setImportType(log.parsedType === "income" ? "income" : "expense"); setImportAmount(log.parsedAmount ? formatMoneyPlain(toDisplayAmount(log.parsedAmount)) : ""); setImportLog(log); }}>
+                    <Button size="sm" className="h-7 bg-emerald-700 text-xs hover:bg-emerald-800" onClick={() => { setImportType(log.parsedType === "income" ? "income" : "expense"); setImportAmount(log.parsedAmount ? formatMoneyPlain(toDisplayAmount(log.parsedAmount)) : ""); try { setImportPurpose(parseBankSms(log.rawText).purpose || ""); } catch { setImportPurpose(""); } setImportLog(log); }}>
                       <Download className="ml-1 h-3 w-3" /> ثبت تراکنش
                     </Button>
                     <Button
@@ -1161,6 +764,7 @@ function SmsSection({ accounts }: { accounts: BankAccount[] }) {
                     amount: toStoredAmount(parseMoneyInput(importAmount)),
                     purpose: importPurpose || null,
                     bankAccountId: importAccount || null,
+                    date: importLog.parsedDate || null,
                   },
                 })
               }
@@ -1247,8 +851,8 @@ export function Banks({ onOpenTxDialog }: { onOpenTxDialog?: () => void }) {
         <>
           {accounts.some((a) => !a.smsSender) && (
             <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 text-xs leading-5 text-amber-900 dark:border-amber-500/40 dark:bg-amber-950/40 dark:text-amber-200">
-              برای خواندن خودکار پیامک، شماره فرستنده پیامک بانک را در ویرایش حساب وارد کنید (مثل 9999).
-              بدون آن هیچ پیامکی خوانده نمی‌شود. اگر چند حساب در یک بانک دارید، شماره حساب/کارت هرکدام را هم وارد کنید تا پیامک‌ها تفکیک شوند.
+              پیام بانک (مثل بلوبانک) را Share کنید یا در کادر «ورود پیام بانکی» بچسبانید — نوع، مبلغ و بانک خودکار تشخیص داده می‌شود.
+              اگر چند حساب در یک بانک دارید، شماره حساب/کارت هرکدام را وارد کنید تا در عیب‌یابی، پیام‌ها تفکیک شوند.
             </div>
           )}
           <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
@@ -1259,13 +863,17 @@ export function Banks({ onOpenTxDialog }: { onOpenTxDialog?: () => void }) {
             const balance = acc.initialBalance + inc - exp;
             const maskedCard = acc.cardNumber ? `•••• ${acc.cardNumber.slice(-4)}` : null;
             return (
-              <Card key={acc.id} className="relative overflow-hidden py-0">
+              <Card key={acc.id} className="relative overflow-hidden py-0 transition-colors" style={{ backgroundColor: withAlpha(acc.color, 0.1), borderColor: withAlpha(acc.color, 0.45) }}>
                 <div className="absolute inset-x-0 top-0 h-1.5" style={{ backgroundColor: acc.color }} />
                 <CardContent className="p-4">
                   <div className="flex items-start justify-between">
-                    <div>
-                      <div className="font-bold">{acc.name}</div>
-                      <div className="text-xs text-muted-foreground">بانک {acc.bankName}</div>
+                    <div className="flex min-w-0 items-center gap-2">
+                      {/* دایرهٔ رنگ حساب — کل کارت با همین رنگ آمیزی شده (v2.16) */}
+                      <span className="h-3 w-3 shrink-0 rounded-full ring-2 ring-white/60 dark:ring-white/20" style={{ backgroundColor: acc.color }} />
+                      <div className="min-w-0">
+                        <div className="truncate font-bold">{acc.name}</div>
+                        <div className="text-xs text-muted-foreground">بانک {acc.bankName}</div>
+                      </div>
                     </div>
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
@@ -1293,7 +901,7 @@ export function Banks({ onOpenTxDialog }: { onOpenTxDialog?: () => void }) {
                     <div className="mt-2 flex items-center gap-1 text-xs text-emerald-700 dark:text-emerald-400">
                       <MessageSquareText className="h-3.5 w-3.5" />
                       <span dir="ltr">{acc.smsSender}</span>
-                      <span className="text-muted-foreground">— پیامک این شماره خوانده می‌شود</span>
+                      <span className="text-muted-foreground">— شماره فرستنده پیام بانک</span>
                     </div>
                   )}
                   <div className="mt-3 text-2xl font-bold tabular-nums-persian">

@@ -14,9 +14,10 @@ export interface HesabSmsPluginInterface {
   requestPermissions(): Promise<{ sms: string }>;
   readInbox(options: { since: number; limit?: number }): Promise<{ messages: NativeSms[] }>;
   openUrl(options: { url: string }): Promise<void>;
+  consumeSharedText(): Promise<{ text: string }>;
   addListener(
-    eventName: "smsReceived",
-    listenerFunc: (sms: NativeSms) => void
+    eventName: "smsReceived" | "shareTextReceived",
+    listenerFunc: (data: never) => void
   ): Promise<PluginListenerHandle> & PluginListenerHandle;
   removeAllListeners(): Promise<void>;
 }
@@ -78,5 +79,18 @@ export async function openExternalUrl(url: string): Promise<void> {
     window.open(url, "_blank");
   } catch {
     // ignore
+  }
+}
+
+/** متنِ پیامِ Share‌شده به برنامه (v2.16) — کاربر از برنامهٔ پیامک/بلوبانک روی پیام Share می‌زند
+ *  و «حساب‌یار» را انتخاب می‌کند. اگر برنامه سرد باز شده باشد، متن هنوز مصرف نشده است.
+ *  در وب/دسکتاپ همیشه متن خالی برمی‌گردد. */
+export async function consumeSharedText(): Promise<{ text: string }> {
+  if (!isNativeAndroid()) return { text: "" };
+  try {
+    const r = await HesabSms.consumeSharedText();
+    return { text: String(r?.text || "") };
+  } catch {
+    return { text: "" };
   }
 }

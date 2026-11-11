@@ -84,6 +84,7 @@ export interface SmsLog {
   bankName?: string | null;
   parsedType?: "income" | "expense" | "unknown" | null;
   parsedAmount?: number | null;
+  parsedDate?: string | null; // تاریخ/ساعت شمسی داخل پیام → ISO (بلوبانک و مشابه — v2.16)
   status: "pending" | "imported" | "ignored";
   transactionId?: string | null;
   nativeId?: string | null;

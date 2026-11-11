@@ -171,8 +171,7 @@ check("تفکیک: بدون شناسه → رد/صف", matchAccountByRef(myAccou
 const ibanAccounts = [{ id: "acc-3", cardNumber: null, accountNumber: null, iban: "IR120570028280101723123123" }];
 check("تفکیک: تطبیق با شبا", matchAccountByRef(ibanAccounts, "0570028280101723123123", null), "acc-3");
 
-// ─── v2.5.0 — judgeSms: حکم نهایی همگام‌سازی (برای ابزار عیب‌یابی) ───
-import { judgeSms } from "../src/lib/sms-sync";
+// ─── v2.5.0 — judgeSms: حکم نهایی همگام‌سازی (برای ابزار عیب‌یابی) — judgeSms بالا import شده ───
 const judgeAccounts = [
   { id: "acc-1", bankName: "ملت", cardNumber: "6104-3379-1234-2872", accountNumber: "77788813972872", iban: null, smsSender: "9999" },
   { id: "acc-2", bankName: "سامان", cardNumber: null, accountNumber: "333444555666", iban: null, smsSender: "۵۰۰۰۱۴۲" },
@@ -282,6 +281,50 @@ check("همان نسخه → جدیدتر نیست", isNewerVersion("v2.8.1", "2
 check("نسخه قدیمی‌تر → جدیدتر نیست", isNewerVersion("v2.7.9", "2.8.1"), false);
 check("طول متفاوت: ۲.۹ جدیدتر از ۲.۸.۵", isNewerVersion("2.9", "2.8.5"), true);
 check("طول متفاوت: ۲.۸ جدیدتر از ۲.۸.۱ نیست", isNewerVersion("2.8", "2.8.1"), false);
+
+// ─── v2.16 — نوتیفیکیشن واقعی بلوبانک (نمونه‌های واقعی کاربر) ───
+import { extractPurpose, extractJalaliDateIso } from "../src/lib/sms-parser";
+
+// نمونه ۱: برداشت واقعی بلو (خرید شارژ) — ارقام فارسی + عنوان «شارژ شدی» که ابهام درآمد/هزینه دارد
+const blu1 = parseBankSms(
+  "شارژ شدی\nعلی عزیز، ۲۲۰,۰۰۰ ریال بابت خرید شارژ از حساب شما کم شد\nموجودی: ۵۰,۰۲۵,۹۷۱ ریال\n1405.08.21 02:42"
+);
+check("بلو برداشت: نوع = هزینه", blu1.type, "expense");
+check("بلو برداشت: مبلغ", blu1.amount, 220000);
+check("بلو برداشت: موجودی", blu1.balance, 50025971);
+check("بلو برداشت: بابت", blu1.purpose, "خرید شارژ");
+check("بلو برداشت: تاریخ شمسی → ISO", blu1.dateIso !== null && blu1.dateIso!.startsWith("2026-11-12"), true);
+
+// نمونه ۲: واریز واقعی بلو
+const blu2 = parseBankSms("بلو\nعلی عزیز، 200,000 ریال به حسابتان واریز شد\nموجودی: 50,225,971 ریال");
+check("بلو واریز: نوع = درآمد", blu2.type, "income");
+check("بلو واریز: مبلغ", blu2.amount, 200000);
+check("بلو واریز: بانک = بلوبانک", blu2.bankName, "بلوبانک");
+check("بلو واریز: موجودی", blu2.balance, 50225971);
+
+// نمونه ۳: واریز سود بانکی بلو — «سود بانکی» نباید نام بانک «ی» بگیرد
+const blu3 = parseBankSms("واریز سود بانکی\n22,841 ریال\nدریافت سود\nموجودی پس از تراکنش: 189,971 ریال");
+check("بلو سود: نوع = درآمد", blu3.type, "income");
+check("بلو سود: مبلغ", blu3.amount, 22841);
+check("بلو سود: نام بانک false-positive «ی» نه", blu3.bankName === null || blu3.bankName === "بلوبانک", true);
+check("بلو سود: موجودی پس از تراکنش", blu3.balance, 189971);
+
+// تاریخ شمسی جداگانه — دو فرمت + ساعت
+check("تاریخ شمسی: جدا شده", extractJalaliDateIso("موجودی: 50 ریال\n1405.08.21 02:42")?.startsWith("2026-11-12"), true);
+check("تاریخ شمسی: فشرده ۱۴۰۵۰۸۲۱", extractJalaliDateIso("۱۴۰۵۰۸۲۱ ۰۲:۳۶")?.startsWith("2026-11-12"), true);
+check("تاریخ شمسی: بی‌تاریخ = null", extractJalaliDateIso("واریز 100 ریال"), null);
+check("بابت: خرید شارژ", extractPurpose("220,000 ریال بابت خرید شارژ از حساب شما کم شد"), "خرید شارژ");
+check("بابت: ثبت شد پایان", extractPurpose("واریز 300,000 ریال بابت فروش ثبت شد"), "فروش");
+check("بابت: نداشتن", extractPurpose("برداشت 100 ریال"), null);
+
+// کلیدواژه «کم شد» بدون بلو هم هزینه است
+const kam = parseBankSms("علی عزیز، 100,000 ریال از حسابتان کم شد");
+check("کم شد: نوع = هزینه", kam.type, "expense");
+
+// پیامک‌های بانک‌های دیگر نباید با عبارت‌های بلو خراب شوند
+const reg = parseBankSms("بانک ملت: واریز به مبلغ 1,200,000 ریال موجودی: 5,432,100");
+check("ملت: هنوز درآمد", reg.type, "income");
+check("ملت: مبلغ", reg.amount, 1200000);
 
 console.log(`\nنتیجه: ${pass} موفق، ${failCount} ناموفق`);
 if (failCount > 0) process.exit(1);

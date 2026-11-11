@@ -64,8 +64,9 @@ export function usingProxy(): boolean {
 const GEMINI_URL = (model: string) => `${geminiBase()}/v1beta/models/${model}:generateContent`;
 const GEMINI_LIST_URL = () => `${geminiBase()}/v1beta/models`;
 const MODEL_CACHE_KEY = "hesab-yar:gemini-model";
-// اتصال‌های ایران/VPN گاهی قطع‌ووصل می‌شوند — هر تلاش حداکثر ۳۰ ثانیه و کل ۳ بار امتحان می‌شود
-export const GEMINI_TIMEOUT_MS = 30000;
+// اتصال‌های ایران/VPN گاهی قطع‌ووصل می‌شوند — هر تلاش حداکثر ۴۵ ثانیه (v2.16: مدل‌های متفکرِ جدید
+// گاهی بیشتر از ۳۰ ثانیه طول می‌کشند — لاگ کاربر timeout روی 30716ms را نشان می‌داد)
+export const GEMINI_TIMEOUT_MS = 45000;
 export const GEMINI_NET_ATTEMPTS = 3;
 export const GEMINI_NET_FAIL_MSG =
   "پاسخی از سرور Gemini نرسید — برنامه ۳ بار تلاش خودکار کرد. " +
@@ -157,7 +158,15 @@ function sleep(ms: number): Promise<void> {
 
 function readCachedModel(): string | null {
   try {
-    return localStorage.getItem(MODEL_CACHE_KEY);
+    const v = localStorage.getItem(MODEL_CACHE_KEY);
+    // نسخه‌های قدیمی برنامه مدل‌های بازنشسته (۲.۵ و قبل) را کش کرده‌اند —
+    // از لاگ کاربر: تست اتصال مدل «gemini-2.5-flash» را کش کرده بود و بعد هر بار ۴۰۴ می‌خورد (v2.16)
+    if (v && RETIRED_MODEL_RE.test(v)) {
+      localStorage.removeItem(MODEL_CACHE_KEY);
+      pushGeminiLog({ level: "info", phase: "system", msg: `کش مدل بازنشسته «${v}» پاک شد — مدل فعال خودکار پیدا می‌شود`, detail: "retired-model cache cleanup" });
+      return null;
+    }
+    return v;
   } catch {
     return null;
   }
@@ -176,6 +185,9 @@ export interface GeminiModelInfo {
   name: string; // مثلاً "models/gemini-2.0-flash" یا "gemini-2.0-flash"
   supportsGenerate: boolean;
 }
+
+// مدل‌های بازنشستهٔ گوگل (از لاگ کاربر: «no longer available to new users») — نباید کش شوند (v2.16)
+export const RETIRED_MODEL_RE = /^gemini-(1\.0|1\.5|2\.0|2\.5)[.-]/;
 
 /** پاسخ GET /v1beta/models → فهرست مدل‌های قابل‌استفاده — خالص و قابل‌تست */
 export function parseModelsList(json: unknown): GeminiModelInfo[] {
@@ -458,12 +470,23 @@ export function parseAiResponse(raw: string): { reply: string; actions: Record<s
   }
 }
 
+/** پیام اختصاصی وقتی سهمیهٔ همهٔ مدل‌ها با کلید فعلی پر شده (v2.16) */
+export const GEMINI_QUOTA_FAIL_MSG =
+  "سهمیهٔ رایگان این کلید Gemini تمام شده است — سهمیهٔ هر مدل جداست و برنامه همه را امتحان کرد. " +
+  "سهمیهٔ رایگان روزانه محدود است؛ چند ساعت بعد دوباره امتحان کنید، یا کلید دوم رایگان از aistudio.google.com/apikey بگیرید و در تنظیمات اضافه کنید.";
+
 /** خطاهای رایج Gemini به پیام فارسی قابل‌فهم */
 export function geminiErrorToPersian(status: number, body: string): string {
   const b = String(body || "");
   if (status === 400 && /API[_ ]?key|API_KEY_INVALID/i.test(b)) return "کلید Gemini نامعتبر است — از تنظیمات کلید درست را وارد کنید.";
   if (status === 401 || status === 403) return "دسترسی به Gemini رد شد — کلید API را در تنظیمات بررسی کنید.";
-  if (status === 429) return "تعداد درخواست‌های Gemini زیاد شده — چند لحظه بعد دوباره امتحان کنید.";
+  if (status === 429) {
+    // دو حالت متفاوت: سقف روزانه/سهمیه (quota) یا فقط سرعت زیاد (rate limit) — v2.16
+    if (/quota|billing|plan|current_quota/i.test(b)) {
+      return "سهمیهٔ رایگان این مدل/کلید تمام شده است — برنامه مدل دیگر را امتحان می‌کند (سهمیهٔ هر مدل جداست)؛ اگر ادامه داشت، بعداً دوباره امتحان کنید.";
+    }
+    return "تعداد درخواست‌های Gemini زیاد شده — چند لحظه بعد دوباره امتحان کنید.";
+  }
   if (status === 404) return "مدل Gemini در دسترس نیست — برنامه خودش مدل دیگری را امتحان می‌کند؛ اگر ادامه داشت، از دکمهٔ «تست اتصال» در تنظیمات مدل فعال را پیدا کنید.";
   if (status >= 500) return "سرور Gemini فعلاً در دسترس نیست — کمی بعد دوباره امتحان کنید.";
   return "خطا در ارتباط با Gemini" + (status ? ` (کد ${status})` : "");
@@ -542,7 +565,7 @@ async function doCallOnce(model: string, body: Record<string, unknown>, apiKey: 
 }
 
 /** تلاش مجدد خودکار روی خطای شبکه (بدون پاسخ HTTP) — v2.14.3 */
-async function doCallWithRetry(model: string, body: Record<string, unknown>, apiKey: string, attempts = GEMINI_NET_ATTEMPTS): Promise<{ status: number; ok: boolean; text: string } | null> {
+async function doCallWithRetry(model: string, body: Record<string, unknown>, apiKey: string, attempts = GEMINI_NET_ATTEMPTS): Promise<{ status: number; ok: boolean; text: string; rawBody?: string } | null> {
   for (let i = 0; i < attempts; i++) {
     if (i > 0) pushGeminiLog({ level: "info", phase: "call", msg: `تلاش مجدد ${(i + 1).toLocaleString("fa-IR", { useGrouping: false })} از ${attempts.toLocaleString("fa-IR", { useGrouping: false })} برای مدل «${model}»` });
     const r = await doCallOnce(model, body, apiKey);
@@ -574,13 +597,20 @@ async function tryWithKey(
   }
 
   // خطای مربوط به «کلید» → کلید بعدی امتحان می‌شود (چند کلید: v2.15)
-  const keyError = r.status === 401 || r.status === 403 || r.status === 429 || (r.status === 400 && r.text.includes("کلید"));
-  if (keyError) return { ok: false, text: r.text, keyError: true };
+  // v2.16: ۴۲۹ دیگر کلید را رد نمی‌کند — سهمیهٔ هر مدل جداست؛ اول مدل‌های دیگر همین کلید امتحان می‌شود
+  // (لاگ کاربر: ۴۲۹ روی gemini-3.8-flash کل زنجیره را می‌بست)
+  const hardKeyError = r.status === 401 || r.status === 403 || (r.status === 400 && r.text.includes("کلید"));
+  if (hardKeyError) return { ok: false, text: r.text, keyError: true };
+  let sawQuota = false;
+  if (r.status === 429) {
+    sawQuota = true;
+    pushGeminiLog({ level: "warn", phase: "call", msg: `سهمیهٔ مدل «${first}» پر شده — مدل‌های دیگر امتحان می‌شوند (سهمیهٔ هر مدل جداست)`, detail: "HTTP 429 → rotate" });
+  }
 
   // ۲) 404 یعنی «مدل بازنشسته شده» و 503 یعنی «مدل شلوغ است» — هر دو → مدل دیگری امتحان می‌شود (v2.15.2)
   const modelGone = r.status === 404;
   const modelBusy = r.status === 503;
-  if (!modelGone && !modelBusy) return { ok: false, text: r.text };
+  if (!modelGone && !modelBusy && !sawQuota) return { ok: false, text: r.text };
   if (modelGone) writeCachedModel(null);
 
   // ۳) پیشنهاد خودکار گوگل در متن خطا — «use models/gemini-3.8-flash» → اول همان امتحان می‌شود (v2.15.2)
@@ -602,7 +632,7 @@ async function tryWithKey(
     if (pref !== first && !candidates.includes(pref)) candidates.push(pref);
   }
 
-  // ۵) امتحان ترتیبی — 404/503 مدل → بعدی؛ 401/403/429 → کلید بعدی؛ بقیه → گزارش
+  // ۵) امتحان ترتیبی — 404/503/429 مدل → بعدی؛ 401/403 → کلید بعدی؛ بقیه → گزارش
   for (const m of candidates.slice(0, 6)) {
     const r2 = await doCallOnce(m, buildGeminiBody(m, opts.systemPrompt, opts.history), apiKey);
     if (r2?.ok) {
@@ -612,10 +642,19 @@ async function tryWithKey(
     if (r2 === null) {
       return { ok: false, text: usingProxy() ? PROXY_NET_FAIL_MSG : GEMINI_NET_FAIL_MSG, network: true };
     }
-    if (r2.status === 401 || r2.status === 403 || r2.status === 429) {
+    if (r2.status === 401 || r2.status === 403) {
       return { ok: false, text: r2.text, keyError: true };
     }
+    if (r2.status === 429) {
+      sawQuota = true;
+      pushGeminiLog({ level: "warn", phase: "call", msg: `سهمیهٔ مدل «${m}» هم پر شده — مدل بعدی`, detail: "HTTP 429 → next" });
+      continue;
+    }
     // 404/503 و بقیهٔ خطاهای مدل → کاندید بعدی
+  }
+  if (sawQuota) {
+    pushGeminiLog({ level: "error", phase: "call", msg: "سهمیهٔ همهٔ مدل‌های این کلید پر شده بود", detail: "all models 429" });
+    return { ok: false, text: GEMINI_QUOTA_FAIL_MSG, keyError: true };
   }
   return { ok: false, text: "هیچ مدل Gemini با این کلید پاسخ نداد — از دکمهٔ «تست اتصال» در تنظیمات وضعیت کلید و مدل‌های فعال را ببینید." };
 }
