@@ -1,6 +1,6 @@
 {
   "name": "nextjs_tailwind_shadcn_ts",
-  "version": "2.16.0",
+  "version": "2.17.0",
   "private": true,
   "scripts": {
     "dev": "bash scripts/start-prod.sh",

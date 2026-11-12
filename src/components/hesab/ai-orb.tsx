@@ -13,6 +13,13 @@ import { Sparkles, X, Mic, MicOff, Send, Volume2, VolumeX, Eraser, Settings2, Lo
 import { api, type AppSettings, type Stats, type Category, type BankAccount, type Installment, type AutoCatRule } from "@/lib/client-api";
 import { callGemini, buildSystemPrompt, buildDataContext, parseAiResponse } from "@/lib/ai/gemini";
 import { validateAiActions, executeAiAction } from "@/lib/ai/actions";
+import {
+  validateAssistantQuery,
+  runAssistantQuery,
+  formatAssistantResult,
+  buildQueryResultMessage,
+  type AssistantTx,
+} from "@/lib/ai/assistant-query";
 import { formatMoneyPlain, toDisplayAmount } from "@/lib/format";
 import { daysUntilDue } from "@/lib/notifications";
 
@@ -405,12 +412,13 @@ export function AiOrb({ onOpenSettings }: { onOpenSettings: () => void }) {
 
       try {
         // زمینهٔ تازهٔ داده‌ها در هر نوبت
-        const [st, cats, accs, insts, rls] = await Promise.all([
+        const [st, cats, accs, insts, rls, txsRaw] = await Promise.all([
           api.get<Stats>("/api/stats").catch(() => null),
           api.get<Category[]>("/api/categories").catch(() => []),
           api.get<BankAccount[]>("/api/bank-accounts").catch(() => []),
           api.get<Installment[]>("/api/installments").catch(() => []),
           api.get<AutoCatRule[]>("/api/auto-cat-rules").catch(() => []),
+          api.get<AssistantTx[]>("/api/transactions").catch(() => []),
         ]);
         const accBalance = new Map<string, number>();
         for (const s of st?.accountSummaries || []) accBalance.set(s.id, s.balance);
@@ -445,11 +453,66 @@ export function AiOrb({ onOpenSettings }: { onOpenSettings: () => void }) {
           return;
         }
         const parsed = parseAiResponse(res.text);
-        const { actions, errors } = validateAiActions(parsed.actions);
         const catNames = new Map<string, string>((categories || []).map((c) => [c.id, c.name] as const));
+        const txs: AssistantTx[] = Array.isArray(txsRaw) ? txsRaw : [];
+
+        // ─── پرس‌وجوی دادهٔ آماری query_data — دور دوم گفتگو (v2.17) ───
+        // مدل جواب آماری را حدس نمی‌زند؛ برنامه روی تراکنش‌های محلی محاسبه می‌کند و نتیجه را
+        // به مدل برمی‌گرداند تا پاسخ نهایی طبیعی بدهد. اگر دور دوم (شبکه/سهمیه) نشد،
+        // پاسخ محلی قطعی نمایش داده می‌شود.
+        const isQd = (a: unknown) => !!a && typeof a === "object" && (a as Record<string, unknown>).type === "query_data";
+        const runQdLocal = (raw: Record<string, unknown>): string | null => {
+          const q = validateAssistantQuery(raw);
+          if (typeof q === "string") return `⚠️ ${q}`;
+          const result = runAssistantQuery(txs, q, { categoryName: (id) => (id ? catNames.get(id) || String(id) : "") });
+          return formatAssistantResult(q, result);
+        };
+
+        let finalReply = parsed.reply;
+        let finalActionsRaw = parsed.actions;
+        let dataLine: string | null = null;
+
+        const qd1 = parsed.actions.find((a) => isQd(a)) as Record<string, unknown> | undefined;
+        if (qd1) {
+          finalActionsRaw = parsed.actions.filter((a) => !isQd(a)); // query_data خارج از اقدام‌های اجرایی است
+          const q1 = validateAssistantQuery(qd1);
+          if (typeof q1 === "string") {
+            dataLine = `⚠️ ${q1}`;
+          } else {
+            const result1 = runAssistantQuery(txs, q1, { categoryName: (id) => (id ? catNames.get(id) || String(id) : "") });
+            dataLine = formatAssistantResult(q1, result1); // پاسخ محلی قطعی — اگر دور دوم نشد همین می‌ماند
+            const history2 = [
+              ...history,
+              { role: "model" as const, text: res.text },
+              { role: "user" as const, text: buildQueryResultMessage(q1, result1) },
+            ];
+            const res2 = await callGemini({ apiKey, systemPrompt, history: history2 });
+            if (res2.ok) {
+              const p2 = parseAiResponse(res2.text);
+              if (p2.reply) {
+                finalReply = p2.reply;
+                dataLine = null; // مدل خودش اعداد را گفته
+                if (p2.actions.length > 0) {
+                  // اگر مدل دوباره query_data داد (تفسیر دوم تومن) — محلی اجرا می‌شود
+                  const qd2 = p2.actions.find((a) => isQd(a)) as Record<string, unknown> | undefined;
+                  if (qd2) dataLine = runQdLocal(qd2);
+                  finalActionsRaw = p2.actions.filter((a) => !isQd(a));
+                }
+              } else {
+                // JSON دور دوم خوانا نبود — پاسخ محلی قطعی می‌ماند
+              }
+            } else {
+              // دور دوم قطع شبکه/سهمیه — جواب محلی قطعی + شفاف‌سازی خطا
+              dataLine = `${dataLine}\n⚠️ ${res2.text}`;
+            }
+          }
+        }
+
+        const { actions, errors } = validateAiActions(finalActionsRaw);
 
         const lines: string[] = [];
-        if (parsed.reply) lines.push(parsed.reply);
+        if (finalReply) lines.push(finalReply);
+        if (dataLine) lines.push(dataLine);
         for (const err of errors) lines.push(`⚠️ ${err}`);
         if (actions.length > 0) {
           const results: string[] = [];

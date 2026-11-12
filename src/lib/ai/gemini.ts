@@ -61,8 +61,14 @@ export function usingProxy(): boolean {
   return readGeminiProxy() !== null;
 }
 
-const GEMINI_URL = (model: string) => `${geminiBase()}/v1beta/models/${model}:generateContent`;
-const GEMINI_LIST_URL = () => `${geminiBase()}/v1beta/models`;
+/** کلید هم در آدرس (؟key=) و هم در هدر فرستاده می‌شود — پروکسی‌هایی که هدرها را رد می‌کنند هم کار می‌کنند (v2.17) */
+function withKey(url: string, apiKey?: string): string {
+  if (!apiKey) return url;
+  return `${url}${url.includes("?") ? "&" : "?"}key=${encodeURIComponent(apiKey)}`;
+}
+
+const GEMINI_URL = (model: string, apiKey?: string) => withKey(`${geminiBase()}/v1beta/models/${model}:generateContent`, apiKey);
+const GEMINI_LIST_URL = (apiKey?: string) => withKey(`${geminiBase()}/v1beta/models`, apiKey);
 const MODEL_CACHE_KEY = "hesab-yar:gemini-model";
 // اتصال‌های ایران/VPN گاهی قطع‌ووصل می‌شوند — هر تلاش حداکثر ۴۵ ثانیه (v2.16: مدل‌های متفکرِ جدید
 // گاهی بیشتر از ۳۰ ثانیه طول می‌کشند — لاگ کاربر timeout روی 30716ms را نشان می‌داد)
@@ -278,7 +284,7 @@ export async function listGeminiModels(apiKey: string, keyLabel?: string): Promi
     const ac = new AbortController();
     const timer = setTimeout(() => ac.abort("timeout"), 15000);
     try {
-      res = await fetch(GEMINI_LIST_URL(), { headers: { "x-goog-api-key": apiKey }, signal: ac.signal });
+      res = await fetch(GEMINI_LIST_URL(apiKey), { headers: { "x-goog-api-key": apiKey }, signal: ac.signal });
       pushGeminiLog({ level: "info", phase: "list", msg: `فهرست مدل‌ها — پاسخ HTTP ${res.status} برای ${label}`, detail: `host=${hostName} ${Date.now() - t0}ms` });
     } catch (e) {
       lastErr = abortReason(e, ac);
@@ -410,11 +416,16 @@ export function buildSystemPrompt(todayIso: string): string {
     "   ساختن قانون دائمی دسته‌بندی خودکار با مبلغ (برای تراکنش‌های آینده).",
     '۳) {"type":"add_transaction","txType":"expense|income","amount":عدد,"purpose":"بابت","categoryId":"...؟","bankAccountId":"...؟","date":"ISO؟"}',
     '۴) {"type":"add_installment","title":"عنوان","kind":"installment|check","amount":عدد,"dueDate":"ISO تاریخ سررسید","counterparty":"بانک/طرف حساب؟","bankAccountId":"...؟"}',
+    '۵) {"type":"query_data","query":{"op":"sum|count|avg|max|min|list","flow":"expense|income؟","min":عدد؟,"max":عدد؟,"exact":عدد؟,"period":"this_month|last_month|last_7_days|last_30_days|last_90_days|this_year|all؟","fromIso":"ISO؟","toIso":"ISO؟","categoryId":"...؟","accountId":"...؟","text":"بخشی از بابت؟","limit":عدد؟}}',
+    "   پرس‌وجوی آماری واقعی روی تراکنش‌های کاربر — برای هر سؤال «چقدر/چند تا/مجموع/میانگین/بیشترین/کمترین/نمونه‌ها».",
+    "   مبلغ‌ها ریال؛ period با تقویم جلالی محاسبه می‌شود (last_month = ماه جلالی قبل، «یه ماه اخیر» = last_month یا last_30_days).",
+    "   بعد از query_data فقط همین اقدام را بده؛ نتیجهٔ واقعی در پیام بعدی برایت می‌آید تا پاسخ نهایی بدهی.",
     "",
     "قواعد:",
     "- categoryId حتماً باید یکی از id های دسته‌های «زمینهٔ برنامه» باشد؛ اگر دستهٔ مناسب نبود، در reply بپرس یا نامش را پیشنهاد بده و action نده.",
-    "- برای سؤال‌های آماری (موجودی، هزینهٔ ماه، بدهی‌ها، اقساط نزدیک) فقط از زمینهٔ برنامه جواب بده و action نده.",
-    "- اعداد فارسی/تومانی کاربر را به ریال تبدیل کن (۱ تومان = ۱۰ ریال؛ «۵۰۰ هزار تومان» = ۵٬۰۰۰٬۰۰۰ ریال).",
+    "- موجودی حساب‌ها و اقساط فقط از زمینهٔ برنامه (JSON بالا) جواب داده می‌شود؛ ولی برای هر آمار روی «تراکنش‌ها» (مجموع، تعداد، میانگین، بیشترین، کمترین، نمونه‌ها) از اقدام ۵ query_data استفاده کن — جواب قطعی از نتیجهٔ واقعی می‌آید، هرگز حدس نزن.",
+    "- پس از دریافت نتیجهٔ query_data، در reply تعداد و مجموع را با اعداد خوانا بگو و شفاف کن چه بازه/دوره‌ای در نظر گرفتی.",
+    "- اعداد فارسی/تومانی کاربر را به ریال تبدیل کن (۱ تومان = ۱۰ ریال؛ «۵۰۰ هزار تومان» = ۵٬۰۰۰٬۰۰۰ ریال). اگر با این تبدیل نتیجهٔ query_data صفر بود و کاربر فقط «تومن» گفته بود، احتمال بده منظورش هزار تومان بوده (۲۰۰ تومن = ۲٬۰۰۰٬۰۰۰ ریال) — یک بار دیگر query_data بزن یا در reply شفاف کن چه تفسیری گرفته‌ای.",
     "- در reply نتیجهٔ اقدام را با عدد خوانا (تومان یا ریال همان‌طور که کاربر گفته) اعلام کن.",
     "- اگر درخواست مبهم است، یک سؤال کوتاه بپرس و action نده.",
     "- تاریخ امروز: " + todayIso,
@@ -520,7 +531,7 @@ async function doCallOnce(model: string, body: Record<string, unknown>, apiKey: 
     const timer = setTimeout(() => ac.abort("timeout"), GEMINI_TIMEOUT_MS);
     const t0 = Date.now();
     try {
-      const res = await fetch(GEMINI_URL(model), {
+      const res = await fetch(GEMINI_URL(model, apiKey), {
         method: "POST",
         headers: { "Content-Type": "application/json", "x-goog-api-key": apiKey },
         body: JSON.stringify(current),

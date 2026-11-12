@@ -52,7 +52,7 @@ import { ACCENTS, SPECIALS, applyAccent, applySpecial, readStoredAccent, readSto
 import { checkNotifPermission, requestNotifPermission, syncInstallmentNotifications, fireTestNotification, notifSupported } from "@/lib/notifications";
 import type { AppSettings, NotifSettings } from "@/lib/client-api";
 
-const APP_VERSION = "۲.۱۶.۰";
+const APP_VERSION = "۲.۱۷.۰";
 
 function ThemeSection() {
   const { theme, setTheme } = useTheme();
@@ -856,8 +856,10 @@ function AiSection() {
         <div className="rounded-xl border p-3">
           <p className="text-sm font-medium">پروکسی شخصی (اختیاری)</p>
           <p className="mt-1 text-[11px] leading-5 text-muted-foreground">
-            اگر VPN هم جواب نمی‌دهد، آدرس یک پروکسی واسط (مثل Cloudflare Worker خودتان) را وارد کنید؛
-            درخواست‌ها به جای گوگل به آن می‌روند و مسیر همان <span dir="ltr" className="font-mono">/v1beta/…</span> است. خالی = اتصال مستقیم. آدرس باید با <span dir="ltr" className="font-mono">https://</span> شروع شود.
+            هر پروکسی‌ای که مسیر گوگل را همان برساند کار می‌کند (Cloudflare Worker، nginx، سرور شخصی و…):
+            درخواست‌ها به جای گوگل به آن می‌روند و مسیر همان <span dir="ltr" className="font-mono">/v1beta/…</span> است.
+            کلید هم در هدر و هم به‌صورت <span dir="ltr" className="font-mono">?key=</span> در همان آدرس فرستاده می‌شود، پس پروکسی‌هایی که هدرها را پاس نمی‌دهند هم کار می‌کنند.
+            خالی = اتصال مستقیم. آدرس باید با <span dir="ltr" className="font-mono">https://</span> شروع شود.
           </p>
           <ProxyRow />
         </div>
